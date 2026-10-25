@@ -1,0 +1,22 @@
+{
+  "name": "framer",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "framer": "./src/index.ts"
+  },
+  "scripts": {
+    "framer": "bun src/index.ts",
+    "build": "bun build --compile src/index.ts --outfile dist/framer"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^7"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.8.1"
+  }
+}
