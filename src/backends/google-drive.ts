@@ -4,11 +4,10 @@ import { parseEnv, serializeEnv } from "../dotenv.ts";
 
 // framer's own OAuth "Desktop app" client. Google treats desktop client secrets as
 // non-confidential, so they can ship inside the binary.
-// TODO: fill in once framer's GCP OAuth client exists.
-const FRAMER_CLIENT_ID = "";
-const FRAMER_CLIENT_SECRET = "";
-const CLIENT_ID = process.env.FRAMER_GOOGLE_CLIENT_ID || FRAMER_CLIENT_ID;
-const CLIENT_SECRET = process.env.FRAMER_GOOGLE_CLIENT_SECRET || FRAMER_CLIENT_SECRET;
+// `bun run build` inlines them from the repo's `.env` (`--env=FRAMER_CLIENT_*`), so they
+// stay out of git; `bun src/index.ts` reads them from the environment.
+const CLIENT_ID = process.env.FRAMER_CLIENT_ID ?? "";
+const CLIENT_SECRET = process.env.FRAMER_CLIENT_SECRET ?? "";
 
 /** Only gives access to files framer itself created. */
 const SCOPE = "https://www.googleapis.com/auth/drive.file";
@@ -70,7 +69,7 @@ function openBrowser(url: string): void {
 export async function login(onUrl: (url: string) => void): Promise<string> {
   if (!CLIENT_ID || !CLIENT_SECRET) {
     throw new Error(
-      "framer's Google OAuth client is not configured. Set FRAMER_GOOGLE_CLIENT_ID and FRAMER_GOOGLE_CLIENT_SECRET, or provide GOOGLE_AUTH.",
+      "framer's Google OAuth client is not configured. Set FRAMER_CLIENT_ID and FRAMER_CLIENT_SECRET, or provide GOOGLE_AUTH.",
     );
   }
 

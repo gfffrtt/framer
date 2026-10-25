@@ -8,7 +8,7 @@
   },
   "scripts": {
     "framer": "bun src/index.ts",
-    "build": "bun build --compile src/index.ts --outfile dist/framer"
+    "build": "bun build --compile --env='FRAMER_CLIENT_*' src/index.ts --outfile dist/framer"
   },
   "devDependencies": {
     "@types/bun": "latest"

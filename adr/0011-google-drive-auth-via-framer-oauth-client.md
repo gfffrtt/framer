@@ -23,6 +23,6 @@ GCP OAuth client, or a service account, is too much setup.
 
 - Someone has to own framer's GCP project and OAuth client; its ID and secret are
   compiled into the binary (Google treats desktop client secrets as
-  non-confidential). `FRAMER_GOOGLE_CLIENT_ID` / `FRAMER_GOOGLE_CLIENT_SECRET`
-  override them.
+  non-confidential). They are kept out of git: `bun run build` inlines
+  `FRAMER_CLIENT_ID` / `FRAMER_CLIENT_SECRET` from the repo's `.env`.
 - With `drive.file`, framer only sees `.framer` folders it created itself.
