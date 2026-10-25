@@ -31,7 +31,7 @@ export async function readProjectConfig(root: string): Promise<ProjectConfig> {
     config.environments.length === 0 ||
     !config.environments.every((env: unknown) => typeof env === "string")
   ) {
-    throw new Error('Project config needs an "environments" array, e.g. ["dev", "prod"].');
+    throw new Error('Project config needs an "environments" array, e.g. ["prod"].');
   }
   if (config.backend?.type !== "google-drive") {
     throw new Error('Project config needs a "backend", e.g. { "type": "google-drive" }.');

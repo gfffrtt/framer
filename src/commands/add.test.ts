@@ -4,7 +4,7 @@ import { exists, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { add, envPrefix } from "./add.ts";
-import { cloudflare } from "../clouds/cloudflare.ts";
+import { cloudflare, listCloudflareAccounts } from "../clouds/cloudflare.ts";
 import type { ProjectConfig } from "../config.ts";
 import { memoryBackend } from "../testing/memory-backend.ts";
 
@@ -64,6 +64,10 @@ test("provisions a bucket per environment and stores its envs in the backend", a
   const dir = await add({ root, config, type: "bucket", name: "uploads", cloud: "cloudflare", backend: memory.backend, cloudflare: cf.client });
 
   expect(cf.buckets).toEqual(["acme-uploads-dev", "acme-uploads-prod"]);
+  expect(cf.tokens.map((token) => token.name)).toEqual([
+    "framer-buckets-acme-uploads-dev",
+    "framer-buckets-acme-uploads-prod",
+  ]);
   expect(cf.tokens.map((token) => token.resources)).toEqual([
     ["com.cloudflare.edge.r2.bucket.acc_default_acme-uploads-dev"],
     ["com.cloudflare.edge.r2.bucket.acc_default_acme-uploads-prod"],
@@ -103,4 +107,13 @@ test("refuses an existing entity, bad names and too-long bucket names", async ()
 
 test("env prefix", () => {
   expect(envPrefix("bucket", "user-files")).toBe("BUCKET_USER_FILES_");
+});
+
+test("lists the accounts a Cloudflare token can access", async () => {
+  const fetcher = (async () =>
+    Response.json({ success: true, errors: [], result: [{ id: "acc", name: "Acme", extra: 1 }] })) as unknown as typeof fetch;
+  expect(await listCloudflareAccounts("t", fetcher)).toEqual([{ id: "acc", name: "Acme" }]);
+
+  const failing = (async () => Response.json({ success: false, errors: [] }, { status: 403 })) as unknown as typeof fetch;
+  expect(await listCloudflareAccounts("t", failing)).toEqual([]);
 });

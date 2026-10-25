@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { Backend } from "./index.ts";
+import { openBrowser } from "../browser.ts";
 import { parseEnv, serializeEnv } from "../dotenv.ts";
 
 // framer's own OAuth "Desktop app" client. Google treats desktop client secrets as
@@ -48,18 +49,6 @@ export function decodeGoogleAuth(value: string): GoogleAuth {
 
 function base64url(bytes: Buffer): string {
   return bytes.toString("base64url");
-}
-
-function openBrowser(url: string): void {
-  const command =
-    process.platform === "darwin" ? ["open", url]
-    : process.platform === "win32" ? ["cmd", "/c", "start", "", url]
-    : ["xdg-open", url];
-  try {
-    Bun.spawn(command, { stdout: "ignore", stderr: "ignore" });
-  } catch {
-    // The URL is also shown to the user, so they can open it by hand.
-  }
 }
 
 /**

@@ -16,7 +16,7 @@ project as a whole. It contains `name`, `environments` and `backend`. Later it
 will contain `order`.
 
 ```json
-{ "name": "acme", "environments": ["dev", "prod"], "backend": { "type": "google-drive" } }
+{ "name": "acme", "environments": ["prod"], "backend": { "type": "google-drive" } }
 ```
 
 > There are two kinds of `framer.json`: the **project config** at the root and the
@@ -61,8 +61,9 @@ other types are not defined yet.
 
 A named deployment target of the whole project, e.g. `dev`, `staging`, `prod`.
 One project describes all of its environments. Environment names are defined by
-the user in the `environments` array of the project config. `framer init` starts
-with `["dev", "prod"]`. `framer add` provisions an entity in every environment.
+the user in the `environments` array of the project config. `framer init` asks
+for the first one (default `prod`); more are added by editing the array.
+`framer add` provisions an entity in every environment.
 
 ## Environment config
 
@@ -113,6 +114,19 @@ the part of framer that turns entity config into real infrastructure on one
 cloud. framer aims to support any cloud, with adapters added over time. The first
 adapter is **Cloudflare** (buckets become R2 buckets). The entity config names the
 cloud: `{ "cloud": "cloudflare" }`.
+
+## Add flow
+
+The sequence every `framer add` follows: **name** → **credentials** (open the
+cloud provider's page, pre-filled when possible, save to the root `.env`) →
+**provision** in every environment → **summary** of the generated envs. Defined in
+ADR 0017.
+
+## Purpose
+
+The entity-type folder a cloud credential is for, used in its name:
+`framer-<purpose>` (e.g. `framer-buckets`), and `framer-<purpose>-<resource>` for
+credentials framer creates for a single resource.
 
 ## Provision
 

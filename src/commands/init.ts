@@ -6,10 +6,12 @@ import { updateRootEnv } from "../dotenv.ts";
 import { ENTITY_DIRS, validateName } from "../entities.ts";
 
 const TURBO_VERSION = "^2.11.10";
-export const DEFAULT_ENVIRONMENTS = ["dev", "prod"];
+export const DEFAULT_ENVIRONMENT = "prod";
 
 export type InitOptions = {
   name: string;
+  /** The project's first environment. Defaults to `prod`. */
+  environment?: string;
   /** Parent directory the project folder is created in. */
   cwd?: string;
   install?: boolean;
@@ -26,6 +28,10 @@ export function validateProjectName(name: string): string | null {
   return validateName(name, "Project name");
 }
 
+export function validateEnvironmentName(name: string): string | null {
+  return validateName(name, "Environment name");
+}
+
 async function isEmptyOrMissing(dir: string): Promise<boolean> {
   try {
     return (await readdir(dir)).length === 0;
@@ -38,8 +44,8 @@ function json(value: unknown): string {
   return JSON.stringify(value, null, 2) + "\n";
 }
 
-function projectFiles(name: string, backend: BackendType): Record<string, string> {
-  const config: ProjectConfig = { name, environments: DEFAULT_ENVIRONMENTS, backend: { type: backend } };
+function projectFiles(name: string, environment: string, backend: BackendType): Record<string, string> {
+  const config: ProjectConfig = { name, environments: [environment], backend: { type: backend } };
   return {
     "framer.json": json(config),
     "package.json": json({
@@ -96,9 +102,9 @@ export type InitStep = {
 
 /** Validates the options and returns the steps that create the project, without running them. */
 export async function planInit(options: InitOptions): Promise<{ root: string; steps: InitStep[] }> {
-  const { name, cwd = process.cwd(), install = true, git = true, backend } = options;
+  const { name, environment = DEFAULT_ENVIRONMENT, cwd = process.cwd(), install = true, git = true, backend } = options;
 
-  const error = validateProjectName(name);
+  const error = validateProjectName(name) ?? validateEnvironmentName(environment);
   if (error) throw new Error(error);
 
   const root = resolve(cwd, name);
@@ -112,7 +118,7 @@ export async function planInit(options: InitOptions): Promise<{ root: string; st
       done: "Wrote project files",
       run: async () => {
         await mkdir(root, { recursive: true });
-        for (const [path, content] of Object.entries(projectFiles(name, backend.type))) {
+        for (const [path, content] of Object.entries(projectFiles(name, environment, backend.type))) {
           await Bun.write(join(root, path), content);
         }
       },

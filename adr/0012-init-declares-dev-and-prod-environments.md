@@ -1,7 +1,7 @@
 # 0012. `framer init` declares `dev` and `prod` environments
 
 - **Date:** 2026-10-24
-- **Status:** Accepted
+- **Status:** Superseded by 0015
 
 ## Context
 

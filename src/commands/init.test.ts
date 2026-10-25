@@ -26,7 +26,7 @@ test("scaffolds an empty turborepo with framer.json and entity folders", async (
 
   expect(await Bun.file(join(root, "framer.json")).json()).toEqual({
     name: "acme",
-    environments: ["dev", "prod"],
+    environments: ["prod"],
     backend: { type: "google-drive" },
   });
 
@@ -41,6 +41,14 @@ test("scaffolds an empty turborepo with framer.json and entity folders", async (
   for (const dir of ENTITY_DIRS) {
     expect(await exists(join(root, dir))).toBe(true);
   }
+});
+
+test("uses the first environment the user chose", async () => {
+  const root = await init({ name: "acme", environment: "staging", cwd, install: false, git: false, backend });
+  expect((await Bun.file(join(root, "framer.json")).json()).environments).toEqual(["staging"]);
+  await expect(init({ name: "other", environment: "Prod!", cwd, install: false, git: false, backend })).rejects.toThrow(
+    "Environment name",
+  );
 });
 
 test("saves backend credentials to the root .env and creates the project in the backend", async () => {

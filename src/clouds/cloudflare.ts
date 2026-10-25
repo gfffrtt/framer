@@ -5,6 +5,37 @@ const R2_WRITE_PERMISSION = "Workers R2 Storage Bucket Item Write";
 
 export const CLOUDFLARE_TOKEN_PERMISSIONS = "Account API Tokens: Edit and Workers R2 Storage: Edit";
 
+/**
+ * The dashboard's "create account API token" page with the permissions framer needs
+ * already filled in (Cloudflare "token template" URL). The token is named
+ * `framer-<purpose>`, e.g. `framer-buckets`.
+ */
+export function cloudflareTokenUrl(purpose: string): string {
+  return (
+    "https://dash.cloudflare.com/?to=/:account/api-tokens&" +
+    new URLSearchParams({
+      permissionGroupKeys: JSON.stringify([
+        { key: "workers_r2", type: "edit" },
+        { key: "account_api_tokens", type: "edit" },
+      ]),
+      name: `framer-${purpose}`,
+    })
+  );
+}
+
+/** Lists the accounts an API token can access, so the user doesn't have to look up the account ID. */
+export async function listCloudflareAccounts(
+  apiToken: string,
+  fetcher: typeof fetch = fetch,
+): Promise<{ id: string; name: string }[]> {
+  const response = await fetcher(`${API_URL}/accounts?per_page=50`, {
+    headers: { Authorization: `Bearer ${apiToken}` },
+  });
+  const json = (await response.json().catch(() => null)) as ApiResponse<{ id: string; name: string }[]> | null;
+  if (!response.ok || !json?.success) return [];
+  return json.result.map(({ id, name }) => ({ id, name }));
+}
+
 export type CloudflareOptions = {
   accountId: string;
   apiToken: string;
@@ -90,7 +121,7 @@ export function cloudflare({ accountId, apiToken, fetch: fetcher = fetch }: Clou
       if (!group) throw new Error(`Cloudflare permission group "${R2_WRITE_PERMISSION}" not found.`);
 
       const token = await api<{ id: string; value: string }>("POST", tokensPath!, {
-        name: `framer ${bucket}`,
+        name: `framer-buckets-${bucket}`,
         policies: [
           {
             effect: "allow",

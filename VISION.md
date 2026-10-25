@@ -78,6 +78,20 @@ my-project/
 
 `framer add` provisions right away, in every environment.
 
+### The add flow
+
+Every `framer add <type> [name]` feels the same, whatever the type or cloud:
+
+1. **Name**: from the argument, or framer asks.
+2. **Credentials**: if the cloud's credentials are missing, framer opens the
+   provider's page in the browser, pre-filled when possible, asks only for what it
+   can't look up itself, and saves it to the root `.env`.
+3. **Provision**: in every environment; generated envs go to the backend.
+4. **Summary**: the names of the generated envs and where they are stored.
+
+Things framer creates are named predictably: `framer-<purpose>` for credentials
+(e.g. `framer-buckets`), `<project>-<name>-<env>` for resources.
+
 ## Roadmap (rough)
 
 1. **Scaffolding + provisioning**: `init` (with a backend), then `add <type>`,
