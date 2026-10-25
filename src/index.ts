@@ -41,6 +41,7 @@ Usage:
   framer add app [name] [--create "<command>"] [--cloud vercel]
   framer add bucket [name] [--cloud cloudflare]
   framer env <type> <name>     Push <type-dir>/<name>/.env.<env> files to the backend
+  framer help                  Show this help
 
 Options:
   -h, --help    Show this help
@@ -415,7 +416,7 @@ async function main(argv: string[]) {
 
   const [command, ...rest] = positionals;
 
-  if (values.help || !command) {
+  if (values.help || !command || command === "help") {
     console.log(HELP);
     return;
   }
