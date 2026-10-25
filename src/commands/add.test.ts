@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { exists, mkdtemp, rm } from "node:fs/promises";
+import { exists, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { add, envPrefix } from "./add.ts";
-import { cloudflare, listCloudflareAccounts } from "../clouds/cloudflare.ts";
-import { credentialKey, credentialName } from "../clouds/index.ts";
+import { planAdd, runCreateCommand } from "./add.ts";
 import type { ProjectConfig } from "../config.ts";
+import { newEntity, type EntityType } from "../entities.ts";
+import { appOnVercel } from "../provisioners/app-vercel.ts";
+import { bucketOnCloudflare } from "../provisioners/bucket-cloudflare.ts";
+import type { Connection, Provisioner } from "../provisioners/index.ts";
+import { runSteps } from "../steps.ts";
+import { fakeCloudflare } from "../testing/fake-cloudflare.ts";
+import { fakeVercel } from "../testing/fake-vercel.ts";
 import { memoryBackend } from "../testing/memory-backend.ts";
 
 const config: ProjectConfig = { name: "acme", environments: ["dev", "prod"], backend: { type: "google-drive" } };
@@ -23,46 +28,29 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-/** A fake Cloudflare API. `fail` makes bucket creation fail. */
-function fakeCloudflare(options: { fail?: boolean } = {}) {
-  const buckets: string[] = [];
-  const tokens: { name: string; resources: string[] }[] = [];
-  const ok = (result: unknown, status = 200) =>
-    Response.json({ success: status < 400, errors: status < 400 ? [] : [{ code: 1, message: "nope" }], result }, { status });
+async function add(type: EntityType, name: string, provisioner: Provisioner, connections: Record<string, Connection>) {
+  const entity = await newEntity(root, type, name);
+  const { steps } = await planAdd({ root, config, entity, provisioner, connections, backend: memory.backend });
+  await runSteps(steps);
+  return entity;
+}
 
-  const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
-    const url = new URL(String(input));
-    const path = url.pathname.replace("/client/v4", "");
-    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-    if (path === "/accounts/acc/tokens/verify") return ok({ status: "active" });
-    if (path === "/accounts/acc/r2/buckets" && init?.method === "POST") {
-      if (options.fail) return ok(null, 500);
-      if (buckets.includes(body.name)) return ok(null, 409);
-      buckets.push(body.name);
-      return ok({ name: body.name });
-    }
-    if (path === "/accounts/acc/tokens/permission_groups") {
-      return ok([
-        { id: "pg-read", name: "Workers R2 Storage Bucket Item Read" },
-        { id: "pg-write", name: "Workers R2 Storage Bucket Item Write" },
-      ]);
-    }
-    if (path === "/accounts/acc/tokens" && init?.method === "POST") {
-      expect(body.policies[0].permission_groups).toEqual([{ id: "pg-write" }]);
-      tokens.push({ name: body.name, resources: Object.keys(body.policies[0].resources) });
-      return ok({ id: `key-${tokens.length}`, value: `secret-${tokens.length}` });
-    }
-    return ok(null, 404);
-  }) as typeof fetch;
+/** Both environments on the same fake account. */
+function bucketConnections(fetch: typeof globalThis.fetch) {
+  const connection = bucketOnCloudflare.connect({ token: "t", scope: "acc" }, fetch);
+  return { dev: connection, prod: connection };
+}
 
-  return { client: cloudflare({ accountId: "acc", apiToken: "t", fetch: fetcher }), buckets, tokens };
+function appConnections(fetch: typeof globalThis.fetch) {
+  const connection = appOnVercel.connect({ token: "t", scope: "team" }, fetch);
+  return { dev: connection, prod: connection };
 }
 
 test("provisions a bucket per environment and stores its envs in the backend", async () => {
   const cf = fakeCloudflare();
   memory.files["acme/dev.env"] = { EXISTING: "kept" };
 
-  const dir = await add({ root, config, type: "bucket", name: "uploads", cloud: "cloudflare", backend: memory.backend, clients: { dev: cf.client, prod: cf.client } });
+  const { dir } = await add("bucket", "uploads", bucketOnCloudflare, bucketConnections(cf.fetch));
 
   expect(cf.buckets).toEqual(["acme-uploads-dev", "acme-uploads-prod"]);
   expect(cf.tokens.map((token) => token.name)).toEqual([
@@ -98,49 +86,103 @@ test("provisions a bucket per environment and stores its envs in the backend", a
 
 test("leaves no entity behind when provisioning fails", async () => {
   const cf = fakeCloudflare({ fail: true });
-  await expect(
-    add({ root, config, type: "bucket", name: "uploads", cloud: "cloudflare", backend: memory.backend, clients: { dev: cf.client, prod: cf.client } }),
-  ).rejects.toThrow("nope");
+  await expect(add("bucket", "uploads", bucketOnCloudflare, bucketConnections(cf.fetch))).rejects.toThrow("nope");
   expect(await exists(join(root, "buckets", "uploads"))).toBe(false);
 });
 
-test("refuses an existing entity, bad names and too-long bucket names", async () => {
-  const cf = fakeCloudflare();
-  const options = { root, config, type: "bucket", cloud: "cloudflare", backend: memory.backend, clients: { dev: cf.client, prod: cf.client } } as const;
+test("names the scoped key whose token was rejected", async () => {
+  const cf = fakeCloudflare({ reject: true });
+  await expect(add("bucket", "uploads", bucketOnCloudflare, bucketConnections(cf.fetch))).rejects.toThrow(
+    "CLOUDFLARE_API_TOKEN_DEV_BUCKETS_UPLOADS: Cloudflare rejected the token.",
+  );
+});
 
-  await add({ ...options, name: "uploads" });
-  await expect(add({ ...options, name: "uploads" })).rejects.toThrow("already exists");
-  await expect(add({ ...options, name: "Uploads" })).rejects.toThrow("lowercase");
-  await expect(add({ ...options, name: "x".repeat(60) })).rejects.toThrow("longer than 63");
+test("refuses too-long resource names before creating anything", async () => {
+  const cf = fakeCloudflare();
+  await expect(add("bucket", "x".repeat(60), bucketOnCloudflare, bucketConnections(cf.fetch))).rejects.toThrow(
+    "longer than 63",
+  );
+  expect(cf.buckets).toEqual([]);
 });
 
 test("uses each environment's own credentials", async () => {
-  const dev = fakeCloudflare();
-  const prod = fakeCloudflare();
-  await add({ root, config, type: "bucket", name: "uploads", cloud: "cloudflare", clients: { dev: dev.client, prod: prod.client }, backend: memory.backend });
-  expect(dev.buckets).toEqual(["acme-uploads-dev"]);
-  expect(prod.buckets).toEqual(["acme-uploads-prod"]);
+  const cf = fakeCloudflare();
+  await add("bucket", "uploads", bucketOnCloudflare, {
+    dev: bucketOnCloudflare.connect({ token: "dev-token", scope: "acc" }, cf.fetch),
+    prod: bucketOnCloudflare.connect({ token: "prod-token", scope: "acc" }, cf.fetch),
+  });
+  expect(cf.tokens.map(({ name, token }) => [name, token])).toEqual([
+    ["framer-buckets-acme-uploads-dev", "dev-token"],
+    ["framer-buckets-acme-uploads-prod", "prod-token"],
+  ]);
 
   await expect(
-    add({ root, config, type: "bucket", name: "files", cloud: "cloudflare", clients: { dev: dev.client }, backend: memory.backend }),
-  ).rejects.toThrow('No cloudflare credentials for environment "prod"');
+    add("bucket", "files", bucketOnCloudflare, { dev: bucketOnCloudflare.connect({ token: "t", scope: "acc" }, cf.fetch) }),
+  ).rejects.toThrow('No Cloudflare credentials for environment "prod"');
 });
 
-test("credential keys are exact per environment, purpose and entity", () => {
-  const target = { project: "acme", env: "prod-eu", purpose: "buckets", name: "user-files" };
-  expect(credentialKey("CLOUDFLARE_API_TOKEN", target)).toBe("CLOUDFLARE_API_TOKEN_PROD_EU_BUCKETS_USER_FILES");
-  expect(credentialName(target)).toBe("framer-acme-prod-eu-buckets-user-files");
+async function writeApp() {
+  const dir = join(root, "apps", "web");
+  await mkdir(join(dir, "node_modules", "dep"), { recursive: true });
+  await Bun.write(join(dir, "package.json"), '{ "name": "web" }\n');
+  await Bun.write(join(dir, "src", "index.html"), "<h1>hi</h1>\n");
+  await Bun.write(join(dir, "node_modules", "dep", "index.js"), "ignored\n");
+  await Bun.write(join(dir, ".env"), "SECRET=ignored\n");
+  return dir;
+}
+
+test("deploys an app per environment with the other entities' envs", async () => {
+  const vercel = fakeVercel();
+  await writeApp();
+  await Bun.write(join(root, "buckets", "uploads", "framer.json"), JSON.stringify({ cloud: "cloudflare", envs: ["BUCKET_UPLOADS_NAME"] }));
+  memory.files["acme/dev.env"] = { BUCKET_UPLOADS_NAME: "acme-uploads-dev", UNRELATED: "not pushed" };
+  memory.files["acme/prod.env"] = { BUCKET_UPLOADS_NAME: "acme-uploads-prod" };
+  // Custom envs pushed with `framer env`; they win over generated ones.
+  memory.files["acme/apps/web/prod.env"] = { RESEND_API_KEY: "re_prod", BUCKET_UPLOADS_NAME: "override" };
+
+  const { dir } = await add("app", "web", appOnVercel, appConnections(vercel.fetch));
+
+  // prod already existed, so only dev is created.
+  expect(vercel.created).toEqual(["acme-web-dev"]);
+  expect(vercel.env["prj-acme-web-dev"]).toEqual([
+    { key: "BUCKET_UPLOADS_NAME", value: "acme-uploads-dev", type: "encrypted", target: ["production", "preview", "development"] },
+  ] as never);
+  expect(vercel.env["prj-acme-web-prod"]?.map(({ key, value }) => [key, value])).toEqual([
+    ["BUCKET_UPLOADS_NAME", "override"],
+    ["RESEND_API_KEY", "re_prod"],
+  ]);
+
+  expect(vercel.deployments.map((deployment) => deployment.project)).toEqual(["acme-web-dev", "acme-web-prod"]);
+  const files = vercel.deployments[0]!.files;
+  expect(files.map((file) => file.file)).toEqual(["package.json", "src/index.html"]);
+  const sha = createHash("sha1").update("<h1>hi</h1>\n").digest("hex");
+  expect(files[1]).toEqual({ file: "src/index.html", sha, size: 12 });
+  expect(vercel.uploads[sha]).toBe("<h1>hi</h1>\n");
+
+  expect(memory.files["acme/dev.env"]).toEqual({
+    BUCKET_UPLOADS_NAME: "acme-uploads-dev",
+    UNRELATED: "not pushed",
+    APP_WEB_URL: "https://acme-web-dev.vercel.app",
+  });
+  expect(memory.files["acme/prod.env"]?.APP_WEB_URL).toBe("https://acme-web-prod.vercel.app");
+  expect(await Bun.file(join(dir, "framer.json")).json()).toEqual({ cloud: "vercel", envs: ["APP_WEB_URL"] });
 });
 
-test("env prefix", () => {
-  expect(envPrefix("bucket", "user-files")).toBe("BUCKET_USER_FILES_");
+test("a failed deployment leaves the app's code but no entity config", async () => {
+  const vercel = fakeVercel({ fail: true });
+  const dir = await writeApp();
+  await expect(add("app", "web", appOnVercel, appConnections(vercel.fetch))).rejects.toThrow("Build logs: https://vercel.com/logs");
+  expect(await exists(join(dir, "package.json"))).toBe(true);
+  expect(await exists(join(dir, "framer.json"))).toBe(false);
 });
 
-test("lists the accounts a Cloudflare token can access", async () => {
-  const fetcher = (async () =>
-    Response.json({ success: true, errors: [], result: [{ id: "acc", name: "Acme", extra: 1 }] })) as unknown as typeof fetch;
-  expect(await listCloudflareAccounts("t", fetcher)).toEqual([{ id: "acc", name: "Acme" }]);
+test("runs the create command inside the app folder and drops its git repo", async () => {
+  const dir = join(root, "apps", "web");
+  await runCreateCommand(dir, "echo '{}' > package.json && mkdir .git");
+  expect(await Bun.file(join(dir, "package.json")).text()).toBe("{}\n");
+  expect(await exists(join(dir, ".git"))).toBe(false);
 
-  const failing = (async () => Response.json({ success: false, errors: [] }, { status: 403 })) as unknown as typeof fetch;
-  expect(await listCloudflareAccounts("t", failing)).toEqual([]);
+  await expect(runCreateCommand(join(root, "apps", "api"), "true")).rejects.toThrow("created nothing");
+  await expect(runCreateCommand(join(root, "apps", "api"), "exit 3")).rejects.toThrow("exit code 3");
+  await expect(runCreateCommand(dir, "true")).rejects.toThrow("not empty");
 });

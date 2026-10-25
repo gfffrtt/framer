@@ -93,6 +93,9 @@ keys…) and the entities' custom envs. Chosen during `framer init` and recorded
 keeps generated envs in `.framer/<project>/<env>.env` and custom envs in
 `.framer/<project>/<type-dir>/<name>/<env>.env` in the user's Drive.
 
+In code, each kind of backend is a **backend adapter**: its credential's root
+`.env` key, how to log in, and how to connect (ADR 0027).
+
 > Say "backend" or "framer backend". Not to be confused with an app that is a
 > backend service.
 
@@ -154,8 +157,22 @@ credentials) and one **provisioner** per entity type it supports.
 ## Provisioner
 
 The part of a cloud adapter that provisions one entity type on one cloud, e.g.
-"bucket on Cloudflare", "app on Vercel". It declares the names of the envs it
-generates and creates the infrastructure for one environment at a time.
+"bucket on Cloudflare", "app on Vercel". It holds its cloud, declares the names
+of the envs it generates and creates the infrastructure for one environment at a
+time. `framer add <type>` picks one of the provisioners registered for the type.
+Steps that create things must be safe to re-run (ADR 0028).
+
+## Connection
+
+A provisioner connected to one environment's cloud account with that
+environment's scoped credentials. The add flow verifies and provisions through
+one connection per environment (ADR 0026).
+
+## Entity type traits
+
+What sets entity types apart in framer's behaviour, recorded once per type:
+whether it has custom envs, whether `framer add` asks for a create command, its
+suggested name, and how the add flow asks for its cloud (ADR 0026).
 
 ## Add flow
 
@@ -176,7 +193,8 @@ must target the current folder.
 The entity-type folder a cloud credential is for (e.g. `buckets`). It is part of a
 scoped credential's key (`CLOUDFLARE_API_TOKEN_PROD_BUCKETS_UPLOADS`) and token
 name (`framer-acme-prod-buckets-uploads`), and of the name of credentials framer
-creates for a single resource (`framer-buckets-acme-uploads-prod`).
+creates for a single resource (`framer-buckets-acme-uploads-prod`). framer
+replaces such a credential every time it provisions the resource (ADR 0028).
 
 ## Provision
 

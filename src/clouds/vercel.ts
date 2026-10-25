@@ -1,15 +1,11 @@
 import { createHash } from "node:crypto";
 import type { EnvVars } from "../dotenv.ts";
+import type { Cloud } from "./index.ts";
 
 const API_URL = "https://api.vercel.com";
 const TOKENS_URL = "https://vercel.com/account/settings/tokens";
 const UPLOAD_CONCURRENCY = 8;
 const DEPLOY_TIMEOUT_MS = 20 * 60 * 1000;
-
-/** Vercel tokens can't be pre-filled from a link, so this is the page the user creates one on. */
-export function vercelTokenUrl(): string {
-  return TOKENS_URL;
-}
 
 /** Lists the teams a token can access (every Vercel account has at least its personal team). */
 export async function listVercelTeams(
@@ -92,7 +88,7 @@ export function vercel({ teamId, token, fetch: fetcher = fetch, pollMs = 3000 }:
       try {
         await api("GET", "/v2/user");
       } catch {
-        throw new Error("Vercel rejected VERCEL_TOKEN. Check that it is valid and has access to VERCEL_TEAM_ID.");
+        throw new Error("Vercel rejected the token. Check that it is valid and has access to the team.");
       }
     },
 
@@ -166,3 +162,21 @@ export function vercel({ teamId, token, fetch: fetcher = fetch, pollMs = 3000 }:
 }
 
 export type Vercel = ReturnType<typeof vercel>;
+
+export const VERCEL: Cloud<Vercel> = {
+  name: "vercel",
+  label: "Vercel",
+  tokenKey: "VERCEL_TOKEN",
+  scopeKey: "VERCEL_TEAM_ID",
+  scopeLabel: "team",
+  // Vercel tokens can't be pre-filled from a link, so this is the page the user creates one on.
+  tokenUrl: () => TOKENS_URL,
+  tokenSteps: (tokenName) => [
+    "1. A browser tab is opening (link below if it doesn't).",
+    `2. Click "Create", name the token ${tokenName}, pick the team`,
+    "   to deploy to and an expiration.",
+    "3. Copy the token and paste it here.",
+  ],
+  listScopes: (token) => listVercelTeams(token),
+  connect: ({ token, scope }, fetch) => vercel({ teamId: scope, token, fetch }),
+};

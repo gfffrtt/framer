@@ -2,6 +2,14 @@ import { join } from "node:path";
 
 export type EnvVars = Record<string, string>;
 
+/** `.gitignore` lines that keep custom env files (`.env.<env>`, secrets) out of git. */
+export const CUSTOM_ENV_IGNORE = [".env.*", "!.env.example"];
+
+/** The custom env file of an entity for one environment: `apps/web/.env.prod`. */
+export function customEnvFile(path: string, env: string): string {
+  return `${path}/.env.${env}`;
+}
+
 const LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)?\s*$/;
 
 function unquote(raw: string): string {

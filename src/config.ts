@@ -1,6 +1,5 @@
 import { dirname, join, resolve } from "node:path";
-
-export type BackendType = "google-drive";
+import { isBackendType, type BackendType } from "./backends/index.ts";
 
 export type ProjectConfig = {
   name: string;
@@ -33,7 +32,7 @@ export async function readProjectConfig(root: string): Promise<ProjectConfig> {
   ) {
     throw new Error('Project config needs an "environments" array, e.g. ["prod"].');
   }
-  if (config.backend?.type !== "google-drive") {
+  if (!isBackendType(config.backend?.type)) {
     throw new Error('Project config needs a "backend", e.g. { "type": "google-drive" }.');
   }
   return config as ProjectConfig;

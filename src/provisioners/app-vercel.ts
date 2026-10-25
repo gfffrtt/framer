@@ -1,6 +1,7 @@
 import { join, sep } from "node:path";
-import type { DeploymentFile } from "../clouds/vercel.ts";
-import { defineProvisioner, resourceName } from "./provisioner.ts";
+import { VERCEL, type DeploymentFile } from "../clouds/vercel.ts";
+import { resourceName } from "../naming.ts";
+import { defineProvisioner } from "./provisioner.ts";
 
 const PROJECT_NAME_MAX = 100;
 
@@ -9,31 +10,31 @@ const IGNORED = /(^|\/)(node_modules|\.git|\.vercel|\.turbo|\.env(\..*)?)(\/|$)/
 
 /** An app on Vercel: one Vercel project per environment, with the project's generated envs, deployed to production. */
 export const appOnVercel = defineProvisioner({
-  cloud: "vercel",
+  cloud: VERCEL,
   envs: ["URL"],
 
-  validate(config, name) {
+  validate(config, entity) {
     for (const env of config.environments) {
-      const project = resourceName(config.name, name, env);
+      const project = resourceName(config.name, entity.name, env);
       if (project.length > PROJECT_NAME_MAX) {
         throw new Error(`Vercel project name "${project}" is longer than ${PROJECT_NAME_MAX} characters. Use a shorter name.`);
       }
     }
   },
 
-  describe(config, name, env) {
-    const project = resourceName(config.name, name, env);
+  describe(config, entity, env) {
+    const project = resourceName(config.name, entity.name, env);
     return {
       title: `Deploying ${project} to Vercel`,
       done: `Deployed ${project} to Vercel and stored its envs in ${env}.env`,
     };
   },
 
-  async provision({ config, name, dir, env, client, envs }) {
-    const project = resourceName(config.name, name, env);
+  async provision({ config, entity, env, client, envs }) {
+    const project = resourceName(config.name, entity.name, env);
     const id = await client.ensureProject(project);
     await client.setEnv(id, envs);
-    const url = await client.deploy({ id, name: project }, await appFiles(dir));
+    const url = await client.deploy({ id, name: project }, await appFiles(entity.dir));
     return { URL: url };
   },
 });

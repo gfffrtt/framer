@@ -2,9 +2,10 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtemp, rm, mkdir, exists } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { init, validateProjectName, type InitOptions } from "./init.ts";
+import { planInit, validateProjectName, type InitOptions } from "./init.ts";
 import { ENTITY_DIRS } from "../entities.ts";
 import { parseEnv } from "../dotenv.ts";
+import { runSteps } from "../steps.ts";
 import { memoryBackend } from "../testing/memory-backend.ts";
 
 let cwd: string;
@@ -20,6 +21,12 @@ beforeEach(async () => {
 afterEach(async () => {
   await rm(cwd, { recursive: true, force: true });
 });
+
+async function init(options: InitOptions): Promise<string> {
+  const { root, steps } = await planInit(options);
+  await runSteps(steps);
+  return root;
+}
 
 test("scaffolds an empty turborepo with framer.json and entity folders", async () => {
   const root = await init({ name: "acme", cwd, install: false, git: false, backend });

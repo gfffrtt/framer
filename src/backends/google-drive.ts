@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { Backend } from "./index.ts";
+import type { Backend, BackendAdapter } from "./index.ts";
 import { openBrowser } from "../browser.ts";
 import { parseEnv, serializeEnv } from "../dotenv.ts";
 
@@ -206,7 +206,7 @@ export function googleDrive(googleAuth: string, fetcher: typeof fetch = fetch): 
   }
 
   function envFolder(project: string, entity?: string): Promise<string> {
-    return folderAt([ROOT_FOLDER, project, entity].filter(Boolean).join("/"));
+    return folderAt(folderPath(project, entity));
   }
 
   return {
@@ -230,5 +230,23 @@ export function googleDrive(googleAuth: string, fetcher: typeof fetch = fetch): 
         body: serializeEnv(vars),
       });
     },
+
+    location(project, env, entity) {
+      return env === undefined ? folderPath(project, entity) : `${folderPath(project, entity)}/${env}.env`;
+    },
   };
 }
+
+/** `.framer/acme`, or `.framer/acme/apps/web` for an entity's custom envs. */
+function folderPath(project: string, entity?: string): string {
+  return [ROOT_FOLDER, project, entity].filter(Boolean).join("/");
+}
+
+export const GOOGLE_DRIVE: BackendAdapter = {
+  label: "Google Drive",
+  credentialKey: "GOOGLE_AUTH",
+  credentialHint: "base64 authorized_user JSON",
+  loginLabel: "Log in with Google",
+  login,
+  connect: (credential) => googleDrive(credential),
+};

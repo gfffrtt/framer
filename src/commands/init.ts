@@ -1,9 +1,11 @@
-import { mkdir, readdir } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
-import type { Backend } from "../backends/index.ts";
-import type { BackendType, ProjectConfig } from "../config.ts";
-import { updateRootEnv } from "../dotenv.ts";
+import type { Backend, BackendType } from "../backends/index.ts";
+import type { ProjectConfig } from "../config.ts";
+import { CUSTOM_ENV_IGNORE, updateRootEnv, type EnvVars } from "../dotenv.ts";
 import { ENTITY_DIRS, validateName } from "../entities.ts";
+import { isEmptyDir, json } from "../files.ts";
+import type { Step } from "../steps.ts";
 
 const TURBO_VERSION = "^2.11.10";
 export const DEFAULT_ENVIRONMENT = "prod";
@@ -19,7 +21,7 @@ export type InitOptions = {
   backend: {
     type: BackendType;
     /** Credentials saved to the root `.env`, e.g. `{ GOOGLE_AUTH: "…" }`. */
-    credentials: Record<string, string>;
+    credentials: EnvVars;
     client: Backend;
   };
 };
@@ -30,18 +32,6 @@ export function validateProjectName(name: string): string | null {
 
 export function validateEnvironmentName(name: string): string | null {
   return validateName(name, "Environment name");
-}
-
-async function isEmptyOrMissing(dir: string): Promise<boolean> {
-  try {
-    return (await readdir(dir)).length === 0;
-  } catch {
-    return true;
-  }
-}
-
-function json(value: unknown): string {
-  return JSON.stringify(value, null, 2) + "\n";
 }
 
 function projectFiles(name: string, environment: string, backend: BackendType): Record<string, string> {
@@ -77,44 +67,25 @@ function projectFiles(name: string, environment: string, backend: BackendType): 
         dev: { cache: false, persistent: true },
       },
     }),
-    ".gitignore": [
-      "node_modules",
-      ".turbo",
-      "dist",
-      "coverage",
-      ".env",
-      // Custom envs (`.env.<env>`) are secrets; framer syncs them to the backend.
-      ".env.*",
-      "!.env.example",
-      ".DS_Store",
-      "",
-    ].join("\n"),
+    ".gitignore": ["node_modules", ".turbo", "dist", "coverage", ".env", ...CUSTOM_ENV_IGNORE, ".DS_Store", ""].join("\n"),
     "README.md": `# ${name}\n\nA framer project.\n\n${ENTITY_DIRS.map((dir) => `- \`${dir}/\``).join("\n")}\n`,
     ...Object.fromEntries(ENTITY_DIRS.map((dir) => [join(dir, ".gitkeep"), ""])),
   };
 }
 
-export type InitStep = {
-  /** Shown while the step runs. */
-  title: string;
-  /** Shown once the step is done. */
-  done: string;
-  run: () => Promise<void>;
-};
-
 /** Validates the options and returns the steps that create the project, without running them. */
-export async function planInit(options: InitOptions): Promise<{ root: string; steps: InitStep[] }> {
+export async function planInit(options: InitOptions): Promise<{ root: string; steps: Step[] }> {
   const { name, environment = DEFAULT_ENVIRONMENT, cwd = process.cwd(), install = true, git = true, backend } = options;
 
   const error = validateProjectName(name) ?? validateEnvironmentName(environment);
   if (error) throw new Error(error);
 
   const root = resolve(cwd, name);
-  if (!(await isEmptyOrMissing(root))) {
+  if (!(await isEmptyDir(root))) {
     throw new Error(`Directory "${basename(root)}" already exists and is not empty.`);
   }
 
-  const steps: InitStep[] = [
+  const steps: Step[] = [
     {
       title: "Writing project files",
       done: "Wrote project files",
@@ -131,8 +102,8 @@ export async function planInit(options: InitOptions): Promise<{ root: string; st
       run: () => updateRootEnv(root, backend.credentials),
     },
     {
-      title: `Creating .framer/${name} in the backend`,
-      done: `Created .framer/${name} in the backend`,
+      title: `Creating ${backend.client.location(name)} in the backend`,
+      done: `Created ${backend.client.location(name)} in the backend`,
       run: () => backend.client.ensureProject(name),
     },
   ];
@@ -162,10 +133,4 @@ async function shell(command: ReturnType<typeof Bun.$>, label: string): Promise<
     const output = result.stderr.toString().trim() || result.stdout.toString().trim();
     throw new Error(`${label} failed (exit code ${result.exitCode})${output ? `\n${output}` : ""}`);
   }
-}
-
-export async function init(options: InitOptions): Promise<string> {
-  const { root, steps } = await planInit(options);
-  for (const step of steps) await step.run();
-  return root;
 }

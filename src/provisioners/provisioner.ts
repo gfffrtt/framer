@@ -1,16 +1,12 @@
-import type { ClientOf, CloudName } from "../clouds/index.ts";
+import type { Cloud, CloudClient, CloudCredentials } from "../clouds/index.ts";
 import type { ProjectConfig } from "../config.ts";
 import type { EnvVars } from "../dotenv.ts";
-import type { EntityType } from "../entities.ts";
+import type { Entity } from "../entities.ts";
 
-export type ProvisionContext<C extends CloudName> = {
+export type ProvisionContext = {
   config: ProjectConfig;
-  /** Entity name, e.g. `uploads`. */
-  name: string;
-  /** Absolute path of the entity folder. */
-  dir: string;
+  entity: Entity;
   env: string;
-  client: ClientOf<C>;
   /**
    * What the entity receives in this environment: the generated envs of the
    * project's other entities, plus its own custom envs if its type has them.
@@ -18,24 +14,40 @@ export type ProvisionContext<C extends CloudName> = {
   envs: EnvVars;
 };
 
-/** Provisions one entity type on one cloud. `framer add` runs it once per environment. */
-export type Provisioner<C extends CloudName = CloudName> = {
-  cloud: C;
+/** How a provisioner is written: typed against its cloud's client. */
+export type ProvisionerSpec<Client extends CloudClient> = {
+  cloud: Cloud<Client>;
   /** Names of the generated envs, without the entity prefix: `["NAME", "ENDPOINT"]`. */
   envs: readonly string[];
   /** Throws if the entity can't be provisioned (e.g. a resource name too long), before anything is created. */
-  validate?(config: ProjectConfig, name: string): void;
+  validate?(config: ProjectConfig, entity: Entity): void;
   /** What the step is called while it runs, and once it is done. */
-  describe(config: ProjectConfig, name: string, env: string): { title: string; done: string };
+  describe(config: ProjectConfig, entity: Entity, env: string): { title: string; done: string };
   /** Creates the entity's infrastructure in `env`. Returns its generated envs, keyed by the names in `envs`. */
-  provision(context: ProvisionContext<C>): Promise<Record<string, string>>;
+  provision(context: ProvisionContext & { client: Client }): Promise<Record<string, string>>;
 };
 
-export function defineProvisioner<C extends CloudName>(provisioner: Provisioner<C>): Provisioner<C> {
-  return provisioner;
-}
+/** A provisioner connected to one environment's cloud account. */
+export type Connection = {
+  verify(): Promise<void>;
+  provision(context: ProvisionContext): Promise<Record<string, string>>;
+};
 
-/** `<project>-<name>-<env>`: how framer names the real resources behind an entity (ADR 0013). */
-export function resourceName(project: string, name: string, env: string): string {
-  return `${project}-${name}-${env}`;
+/**
+ * Provisions one entity type on one cloud (ADR 0022). Its client type is hidden
+ * behind `connect`, so the add flow and the registry don't depend on any cloud.
+ */
+export type Provisioner = Omit<ProvisionerSpec<CloudClient>, "provision"> & {
+  /** Connects with one environment's credentials (ADR 0023). */
+  connect(credentials: CloudCredentials, fetch?: typeof globalThis.fetch): Connection;
+};
+
+export function defineProvisioner<Client extends CloudClient>({ provision, ...spec }: ProvisionerSpec<Client>): Provisioner {
+  return {
+    ...spec,
+    connect(credentials, fetch) {
+      const client = spec.cloud.connect(credentials, fetch);
+      return { verify: () => client.verify(), provision: (context) => provision({ ...context, client }) };
+    },
+  };
 }

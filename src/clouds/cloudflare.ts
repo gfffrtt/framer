@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
+import type { Cloud } from "./index.ts";
 
 const API_URL = "https://api.cloudflare.com/client/v4";
 const R2_WRITE_PERMISSION = "Workers R2 Storage Bucket Item Write";
+const PAGE_SIZE = 50;
 
 export const CLOUDFLARE_TOKEN_PERMISSIONS = "Account API Tokens: Edit and Workers R2 Storage: Edit";
 
@@ -63,9 +65,6 @@ export class CloudflareError extends Error {
 
 /** Cloudflare adapter: provisions R2 buckets and bucket-scoped S3 credentials. */
 export function cloudflare({ accountId, apiToken, fetch: fetcher = fetch }: CloudflareOptions) {
-  /** Account-owned and user-owned tokens live under different API paths; `verify` picks one. */
-  let tokensPath: string | undefined;
-
   async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
     const response = await fetcher(`${API_URL}${path}`, {
       method,
@@ -80,24 +79,38 @@ export function cloudflare({ accountId, apiToken, fetch: fetcher = fetch }: Clou
     return json.result;
   }
 
-  async function verify(): Promise<void> {
-    if (tokensPath) return;
-    for (const path of [`/accounts/${accountId}/tokens`, "/user/tokens"]) {
-      try {
-        await api("GET", `${path}/verify`);
-        tokensPath = path;
-        return;
-      } catch {
-        // Try the other kind of token.
+  /** Account-owned and user-owned tokens live under different API paths; the first that verifies wins. */
+  let tokensPath: Promise<string> | undefined;
+  function tokens(): Promise<string> {
+    tokensPath ??= (async () => {
+      for (const path of [`/accounts/${accountId}/tokens`, "/user/tokens"]) {
+        try {
+          await api("GET", `${path}/verify`);
+          return path;
+        } catch {
+          // Try the other kind of token.
+        }
       }
+      throw new Error(`Cloudflare rejected the token. It needs: ${CLOUDFLARE_TOKEN_PERMISSIONS}.`);
+    })();
+    return tokensPath;
+  }
+
+  async function tokensNamed(path: string, name: string): Promise<{ id: string }[]> {
+    const found: { id: string }[] = [];
+    for (let page = 1; ; page++) {
+      const batch = await api<{ id: string; name: string }[]>("GET", `${path}?page=${page}&per_page=${PAGE_SIZE}`);
+      found.push(...batch.filter((token) => token.name === name));
+      if (batch.length < PAGE_SIZE) return found;
     }
-    throw new Error(`Cloudflare rejected CLOUDFLARE_API_TOKEN. It needs: ${CLOUDFLARE_TOKEN_PERMISSIONS}.`);
   }
 
   return {
     endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
 
-    verify,
+    async verify(): Promise<void> {
+      await tokens();
+    },
 
     /** Creates an R2 bucket. A bucket that already exists in the account counts as success. */
     async ensureR2Bucket(name: string): Promise<void> {
@@ -110,17 +123,21 @@ export function cloudflare({ accountId, apiToken, fetch: fetcher = fetch }: Clou
     },
 
     /**
-     * Creates an API token that can only read/write objects in `bucket`, and turns it
-     * into S3 credentials: access key id = token id, secret = sha256(token value).
+     * Creates an API token named `tokenName` that can only read/write objects in
+     * `bucket`, and turns it into S3 credentials: access key id = token id,
+     * secret = sha256(token value). Tokens already named `tokenName` (left by an
+     * earlier run) are deleted first, so re-running never leaves a live orphan.
      */
-    async createR2Credentials(bucket: string): Promise<R2Credentials> {
-      await verify();
-      const groups = await api<{ id: string; name: string }[]>("GET", `${tokensPath}/permission_groups`);
+    async replaceR2Credentials(bucket: string, tokenName: string): Promise<R2Credentials> {
+      const path = await tokens();
+      const groups = await api<{ id: string; name: string }[]>("GET", `${path}/permission_groups`);
       const group = groups.find((candidate) => candidate.name === R2_WRITE_PERMISSION);
       if (!group) throw new Error(`Cloudflare permission group "${R2_WRITE_PERMISSION}" not found.`);
 
-      const token = await api<{ id: string; value: string }>("POST", tokensPath!, {
-        name: `framer-buckets-${bucket}`,
+      for (const { id } of await tokensNamed(path, tokenName)) await api("DELETE", `${path}/${id}`);
+
+      const token = await api<{ id: string; value: string }>("POST", path, {
+        name: tokenName,
         policies: [
           {
             effect: "allow",
@@ -139,3 +156,21 @@ export function cloudflare({ accountId, apiToken, fetch: fetcher = fetch }: Clou
 }
 
 export type Cloudflare = ReturnType<typeof cloudflare>;
+
+export const CLOUDFLARE: Cloud<Cloudflare> = {
+  name: "cloudflare",
+  label: "Cloudflare",
+  tokenKey: "CLOUDFLARE_API_TOKEN",
+  scopeKey: "CLOUDFLARE_ACCOUNT_ID",
+  scopeLabel: "account",
+  tokenUrl: cloudflareTokenUrl,
+  tokenSteps: () => [
+    "1. A browser tab is opening (link below if it doesn't). The name and",
+    `   permissions (${CLOUDFLARE_TOKEN_PERMISSIONS}) are already filled in.`,
+    "   Pick your account if asked.",
+    '2. Click "Continue to summary", then "Create token".',
+    "3. Copy the token and paste it here.",
+  ],
+  listScopes: (token) => listCloudflareAccounts(token),
+  connect: ({ token, scope }, fetch) => cloudflare({ accountId: scope, apiToken: token, fetch }),
+};

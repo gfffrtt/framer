@@ -1,33 +1,35 @@
-import { defineProvisioner, resourceName } from "./provisioner.ts";
+import { CLOUDFLARE } from "../clouds/cloudflare.ts";
+import { resourceCredentialName, resourceName } from "../naming.ts";
+import { defineProvisioner } from "./provisioner.ts";
 
 const BUCKET_NAME_MAX = 63;
 
 /** A bucket on Cloudflare: one R2 bucket per environment, with its own bucket-scoped S3 credentials. */
 export const bucketOnCloudflare = defineProvisioner({
-  cloud: "cloudflare",
+  cloud: CLOUDFLARE,
   envs: ["NAME", "ENDPOINT", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY"],
 
-  validate(config, name) {
+  validate(config, entity) {
     for (const env of config.environments) {
-      const bucket = resourceName(config.name, name, env);
+      const bucket = resourceName(config.name, entity.name, env);
       if (bucket.length > BUCKET_NAME_MAX) {
         throw new Error(`Bucket name "${bucket}" is longer than ${BUCKET_NAME_MAX} characters. Use a shorter name.`);
       }
     }
   },
 
-  describe(config, name, env) {
-    const bucket = resourceName(config.name, name, env);
+  describe(config, entity, env) {
+    const bucket = resourceName(config.name, entity.name, env);
     return {
       title: `Provisioning R2 bucket ${bucket}`,
       done: `Provisioned R2 bucket ${bucket} and stored its envs in ${env}.env`,
     };
   },
 
-  async provision({ config, name, env, client }) {
-    const bucket = resourceName(config.name, name, env);
+  async provision({ config, entity, env, client }) {
+    const bucket = resourceName(config.name, entity.name, env);
     await client.ensureR2Bucket(bucket);
-    const credentials = await client.createR2Credentials(bucket);
+    const credentials = await client.replaceR2Credentials(bucket, resourceCredentialName(entity.type, bucket));
     return {
       NAME: bucket,
       ENDPOINT: client.endpoint,

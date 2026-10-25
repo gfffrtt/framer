@@ -112,7 +112,7 @@ Things framer creates are named predictably:
 | ------------------------------------- | ------------------------------------------ | -------------------------------------------- |
 | Credential key in the root `.env`     | `<KEY>_<ENV>_<PURPOSE>_<NAME>`             | `CLOUDFLARE_API_TOKEN_PROD_BUCKETS_UPLOADS`  |
 | Token the user creates for framer     | `framer-<project>-<env>-<purpose>-<name>`  | `framer-acme-prod-buckets-uploads`           |
-| Credential framer creates for a resource | `framer-<purpose>-<resource>`           | `framer-buckets-acme-uploads-prod`           |
+| Credential framer creates for a resource (replaced on every run) | `framer-<purpose>-<resource>` | `framer-buckets-acme-uploads-prod` |
 | Resource                              | `<project>-<name>-<env>`                   | `acme-uploads-prod`                          |
 | Generated env                         | `<TYPE>_<NAME>_<KEY>`                      | `BUCKET_UPLOADS_ENDPOINT`                    |
 

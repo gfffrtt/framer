@@ -1,108 +1,84 @@
-import { exists, mkdir, readdir, rm } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Backend } from "../backends/index.ts";
-import type { ClientOf, CloudName } from "../clouds/index.ts";
 import type { ProjectConfig } from "../config.ts";
-import { ENTITY_TYPES, entityEnvNames, validateName, type EntityType } from "../entities.ts";
-import { findProvisioner } from "../provisioners/index.ts";
-import type { InitStep } from "./init.ts";
+import { ENTITY_TYPES, entityEnvNames, type Entity } from "../entities.ts";
+import { isEmptyDir, json } from "../files.ts";
+import { credentialKey, credentialTarget, envPrefix } from "../naming.ts";
+import type { Connection, Provisioner } from "../provisioners/index.ts";
+import type { Step } from "../steps.ts";
 
-export type AddOptions<C extends CloudName = CloudName> = {
+export type AddOptions = {
   root: string;
   config: ProjectConfig;
-  type: EntityType;
-  name: string;
-  cloud: C;
-  /** One client per environment, each built from that environment's credentials (ADR 0023). */
-  clients: Record<string, ClientOf<C>>;
+  /** From `newEntity`: a valid name, not in the project yet. */
+  entity: Entity;
+  /** One of `PROVISIONERS[entity.type]`. */
+  provisioner: Provisioner;
+  /** One connection per environment, each from that environment's credentials (ADR 0023). */
+  connections: Record<string, Connection>;
   backend: Backend;
 };
 
-/** `uploads` → `BUCKET_UPLOADS_`. */
-export function envPrefix(type: EntityType, name: string): string {
-  return `${type}_${name}_`.toUpperCase().replace(/-/g, "_");
-}
-
-/** `apps/web`: where an entity lives, relative to the project root. */
-export function entityPath(type: EntityType, name: string): string {
-  return `${ENTITY_TYPES.find((entityType) => entityType.type === type)!.dir}/${name}`;
-}
-
 /**
- * Validates the options and returns the steps that provision the entity in every
- * environment, store its generated envs in the backend and write its entity config.
+ * Returns the steps that provision the entity in every environment, store its
+ * generated envs in the backend and write its entity config.
  */
-export async function planAdd(options: AddOptions): Promise<{ dir: string; steps: InitStep[]; keys: string[] }> {
-  const { root, config, type, name, cloud, clients, backend } = options;
+export async function planAdd(options: AddOptions): Promise<{ steps: Step[]; keys: string[] }> {
+  const { root, config, entity, provisioner, connections, backend } = options;
+  const { cloud } = provisioner;
 
-  const error = validateName(name, "Entity name");
-  if (error) throw new Error(error);
+  const targets = config.environments.map((env) => {
+    const connection = connections[env];
+    if (!connection) throw new Error(`No ${cloud.label} credentials for environment "${env}".`);
+    return { env, connection, tokenKey: credentialKey(cloud.tokenKey, credentialTarget(config.name, env, entity)) };
+  });
+  provisioner.validate?.(config, entity);
 
-  const provisioner = findProvisioner(type, cloud);
-  if (!provisioner) throw new Error(`framer can't provision ${type}s on ${cloud} yet.`);
-  const missing = config.environments.find((env) => !clients[env]);
-  if (missing) throw new Error(`No ${cloud} credentials for environment "${missing}".`);
-
-  const path = entityPath(type, name);
-  const dir = join(root, path);
-  if (await exists(join(dir, "framer.json"))) throw new Error(`${path} already exists.`);
-  provisioner.validate?.(config, name);
-
-  const prefix = envPrefix(type, name);
+  const prefix = envPrefix(entity.type, entity.name);
   const keys = provisioner.envs.map((key) => prefix + key);
   // Other entities' envs, handed to the provisioner (e.g. an app gets the buckets' envs).
-  const otherKeys = await entityEnvNames(root, path);
+  const otherKeys = await entityEnvNames(root, entity.path);
+  const { customEnvs } = ENTITY_TYPES[entity.type];
 
-  const customEnvs = ENTITY_TYPES.find((entityType) => entityType.type === type)!.customEnvs;
-
-  const steps: InitStep[] = config.environments.map((env) => ({
+  const verify: Step[] = targets.map(({ env, connection, tokenKey }) => ({
     title: `Verifying ${env} credentials`,
     done: `Verified ${env} credentials`,
-    run: () => clients[env]!.verify(),
+    run: () =>
+      connection.verify().catch((error: unknown) => {
+        // The client doesn't know which scoped key its token came from; name it here.
+        throw new Error(`${tokenKey}: ${error instanceof Error ? error.message : error}`, { cause: error });
+      }),
   }));
 
-  for (const env of config.environments) {
-    steps.push({
-      ...provisioner.describe(config, name, env),
-      run: async () => {
-        const vars = await backend.readEnv(config.name, env);
-        const envs = {
-          ...Object.fromEntries(otherKeys.filter((key) => key in vars).map((key) => [key, vars[key]!])),
-          // Custom envs win: the user set them on purpose (ADR 0025).
-          ...(customEnvs ? await backend.readEnv(config.name, env, path) : {}),
-        };
-        const client = clients[env]!;
-        const generated = await provisioner.provision({ config, name, dir, env, client, envs });
-        await backend.writeEnv(config.name, env, {
-          ...vars,
-          ...Object.fromEntries(provisioner.envs.map((key) => [prefix + key, generated[key]!])),
-        });
-      },
-    });
-  }
+  const provision: Step[] = targets.map(({ env, connection }) => ({
+    ...provisioner.describe(config, entity, env),
+    run: async () => {
+      const vars = await backend.readEnv(config.name, env);
+      const envs = {
+        ...Object.fromEntries(otherKeys.filter((key) => key in vars).map((key) => [key, vars[key]!])),
+        // Custom envs win: the user set them on purpose (ADR 0025).
+        ...(customEnvs ? await backend.readEnv(config.name, env, entity.path) : {}),
+      };
+      const generated = await connection.provision({ config, entity, env, envs });
+      await backend.writeEnv(config.name, env, {
+        ...vars,
+        ...Object.fromEntries(provisioner.envs.map((key) => [prefix + key, generated[key]!])),
+      });
+    },
+  }));
 
   // Written last, so a failed provisioning leaves no entity behind.
-  steps.push({
-    title: `Writing ${path}/framer.json`,
-    done: `Wrote ${path}/framer.json`,
+  const writeConfig: Step = {
+    title: `Writing ${entity.path}/framer.json`,
+    done: `Wrote ${entity.path}/framer.json`,
     run: async () => {
-      await mkdir(dir, { recursive: true });
-      await Bun.write(join(dir, "framer.json"), JSON.stringify({ cloud, envs: keys }, null, 2) + "\n");
+      await mkdir(entity.dir, { recursive: true });
+      await Bun.write(join(entity.dir, "framer.json"), json({ cloud: cloud.name, envs: keys }));
     },
-  });
+  };
 
-  return { dir, steps, keys };
-}
-
-export async function add(options: AddOptions): Promise<string> {
-  const { dir, steps } = await planAdd(options);
-  for (const step of steps) await step.run();
-  return dir;
-}
-
-/** True when `dir` is missing or has no files. */
-export async function isEmptyDir(dir: string): Promise<boolean> {
-  return (await readdir(dir).catch(() => [])).length === 0;
+  return { steps: [...verify, ...provision, writeConfig], keys };
 }
 
 /**

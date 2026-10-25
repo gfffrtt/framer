@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ignoreCustomEnvFiles, planEnv } from "./env.ts";
 import type { ProjectConfig } from "../config.ts";
+import { runSteps } from "../steps.ts";
 import { memoryBackend } from "../testing/memory-backend.ts";
 
 const config: ProjectConfig = { name: "acme", environments: ["dev", "staging", "prod"], backend: { type: "google-drive" } };
@@ -23,7 +24,7 @@ afterEach(async () => {
 
 async function env(type: "app" | "bucket", name = "web") {
   const plan = await planEnv({ root, config, type, name, backend: memory.backend });
-  for (const step of plan.steps) await step.run();
+  await runSteps(plan.steps);
   return plan;
 }
 
