@@ -58,7 +58,7 @@ my-project/
 │       └── prod.json       # optional prod overrides
 ├── buckets/                # object storage
 │   └── uploads/
-│       └── framer.json     # { "cloud": "cloudflare" }
+│       └── framer.json     # { "cloud": "cloudflare", "envs": ["BUCKET_UPLOADS_NAME", …] }
 ├── jobs/                   # scheduled (cron) work
 └── tasks/                  # one-off / triggered work
 ```

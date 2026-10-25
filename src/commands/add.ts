@@ -98,7 +98,7 @@ export async function planAdd(options: AddOptions): Promise<{ dir: string; steps
     done: `Wrote ${typeDir}/${name}/framer.json`,
     run: async () => {
       await mkdir(dir, { recursive: true });
-      await Bun.write(join(dir, "framer.json"), JSON.stringify({ cloud }, null, 2) + "\n");
+      await Bun.write(join(dir, "framer.json"), JSON.stringify({ cloud, envs: keys }, null, 2) + "\n");
     },
   });
 

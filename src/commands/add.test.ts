@@ -83,7 +83,15 @@ test("provisions a bucket per environment and stores its envs in the backend", a
   expect(memory.files["acme/prod.env"]?.BUCKET_UPLOADS_NAME).toBe("acme-uploads-prod");
 
   expect(dir).toBe(join(root, "buckets", "uploads"));
-  expect(await Bun.file(join(dir, "framer.json")).json()).toEqual({ cloud: "cloudflare" });
+  expect(await Bun.file(join(dir, "framer.json")).json()).toEqual({
+    cloud: "cloudflare",
+    envs: [
+      "BUCKET_UPLOADS_NAME",
+      "BUCKET_UPLOADS_ENDPOINT",
+      "BUCKET_UPLOADS_ACCESS_KEY_ID",
+      "BUCKET_UPLOADS_SECRET_ACCESS_KEY",
+    ],
+  });
   expect(await exists(join(dir, "dev.json"))).toBe(false);
 });
 

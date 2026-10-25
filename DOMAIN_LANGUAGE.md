@@ -54,8 +54,9 @@ type. An entity is referred to as `<type-folder>/<name>`, e.g. `dbs/main`.
 
 The base config of an entity. It applies to every environment, and holds things
 like which cloud the entity runs on and what it is (e.g. which db engine). The
-schema depends on the entity type. For a bucket it is `{ "cloud": "cloudflare" }`;
-other types are not defined yet.
+schema depends on the entity type. For a bucket it is
+`{ "cloud": "cloudflare", "envs": [...] }`; other types are not defined yet.
+`envs` lists the names of the entity's generated envs (values live in the backend).
 
 ## Environment
 
