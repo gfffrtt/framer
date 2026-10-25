@@ -7,10 +7,9 @@ export const CLOUDFLARE_TOKEN_PERMISSIONS = "Account API Tokens: Edit and Worker
 
 /**
  * The dashboard's "create account API token" page with the permissions framer needs
- * already filled in (Cloudflare "token template" URL). The token is named
- * `framer-<purpose>`, e.g. `framer-buckets`.
+ * and the token's name already filled in (Cloudflare "token template" URL).
  */
-export function cloudflareTokenUrl(purpose: string): string {
+export function cloudflareTokenUrl(tokenName: string): string {
   return (
     "https://dash.cloudflare.com/?to=/:account/api-tokens&" +
     new URLSearchParams({
@@ -18,7 +17,7 @@ export function cloudflareTokenUrl(purpose: string): string {
         { key: "workers_r2", type: "edit" },
         { key: "account_api_tokens", type: "edit" },
       ]),
-      name: `framer-${purpose}`,
+      name: tokenName,
     })
   );
 }

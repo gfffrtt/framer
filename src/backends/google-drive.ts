@@ -137,7 +137,10 @@ function escapeQuery(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
 
-/** A backend that stores env files in `.framer/<project>/<env>.env` in the user's Google Drive. */
+/**
+ * A backend that stores env files in the user's Google Drive: `.framer/<project>/<env>.env`
+ * for generated envs, `.framer/<project>/<entity>/<env>.env` for an entity's custom envs.
+ */
 export function googleDrive(googleAuth: string, fetcher: typeof fetch = fetch): Backend {
   const auth = decodeGoogleAuth(googleAuth);
   let accessToken: Promise<string> | undefined;
@@ -189,29 +192,36 @@ export function googleDrive(googleAuth: string, fetcher: typeof fetch = fetch): 
   }
 
   // Cached so concurrent calls don't create duplicate folders.
-  const projectFolders = new Map<string, Promise<string>>();
-  function projectFolder(project: string): Promise<string> {
-    let id = projectFolders.get(project);
+  const folders = new Map<string, Promise<string>>();
+  /** The folder at `path` (e.g. `.framer/acme/apps/web`), created if missing. */
+  function folderAt(path: string): Promise<string> {
+    let id = folders.get(path);
     if (!id) {
-      id = folder(ROOT_FOLDER, "root").then((root) => folder(project, root));
-      projectFolders.set(project, id);
+      const slash = path.lastIndexOf("/");
+      const parent = slash === -1 ? Promise.resolve("root") : folderAt(path.slice(0, slash));
+      id = parent.then((parentId) => folder(path.slice(slash + 1), parentId));
+      folders.set(path, id);
     }
     return id;
   }
 
+  function envFolder(project: string, entity?: string): Promise<string> {
+    return folderAt([ROOT_FOLDER, project, entity].filter(Boolean).join("/"));
+  }
+
   return {
     async ensureProject(project) {
-      await projectFolder(project);
+      await envFolder(project);
     },
 
-    async readEnv(project, env) {
-      const id = await find(`${env}.env`, await projectFolder(project), false);
+    async readEnv(project, env, entity) {
+      const id = await find(`${env}.env`, await envFolder(project, entity), false);
       if (!id) return {};
       return parseEnv(await (await drive(`${DRIVE_URL}/${id}?alt=media`)).text());
     },
 
-    async writeEnv(project, env, vars) {
-      const parent = await projectFolder(project);
+    async writeEnv(project, env, vars, entity) {
+      const parent = await envFolder(project, entity);
       const name = `${env}.env`;
       const id = (await find(name, parent, false)) ?? (await create(name, parent, "text/plain"));
       await drive(`${UPLOAD_URL}/${id}?uploadType=media`, {

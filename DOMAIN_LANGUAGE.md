@@ -55,7 +55,8 @@ type. An entity is referred to as `<type-folder>/<name>`, e.g. `dbs/main`.
 The base config of an entity. It applies to every environment, and holds things
 like which cloud the entity runs on and what it is (e.g. which db engine). The
 schema depends on the entity type. For a bucket it is
-`{ "cloud": "cloudflare", "envs": [...] }`; other types are not defined yet.
+`{ "cloud": "cloudflare", "envs": [...] }`, for an app
+`{ "cloud": "vercel", "envs": [...] }`; other types are not defined yet.
 `envs` lists the names of the entity's generated envs (values live in the backend).
 
 ## Environment
@@ -86,10 +87,11 @@ parallel. *(Not implemented yet.)*
 
 ## Backend
 
-Where framer stores the envs it generates (bucket names, endpoints, access keys…).
-Chosen during `framer init` and recorded as `backend` in the project config. The
-only backend today is **Google Drive**, which keeps them in
-`.framer/<project>/<env>.env` in the user's Drive.
+Where framer stores envs: the ones it generates (bucket names, endpoints, access
+keys…) and the entities' custom envs. Chosen during `framer init` and recorded as
+`backend` in the project config. The only backend today is **Google Drive**, which
+keeps generated envs in `.framer/<project>/<env>.env` and custom envs in
+`.framer/<project>/<type-dir>/<name>/<env>.env` in the user's Drive.
 
 > Say "backend" or "framer backend". Not to be confused with an app that is a
 > backend service.
@@ -99,35 +101,82 @@ only backend today is **Google Drive**, which keeps them in
 The environment variables framer creates when it provisions an entity, e.g.
 `BUCKET_UPLOADS_ENDPOINT`. Keys are prefixed with the entity type and entity name.
 They are stored in the backend, in one **env file** per environment
-(`<env>.env`), shared by all entities of the project.
+(`<env>.env`), shared by all entities of the project. When an entity is
+provisioned it receives the generated envs of the project's other entities (an
+app sets them on its deployment).
 
 ## Root `.env`
 
 The gitignored `.env` at the root of a project. It holds the credentials framer
-itself needs: `GOOGLE_AUTH` (base64 Google credentials for the backend),
-`CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`. It is not where generated envs
-go; those live in the backend.
+itself needs: `GOOGLE_AUTH` (base64 Google credentials for the backend) and one
+set of **scoped credentials** per environment and entity. It is not where
+generated envs go; those live in the backend.
+
+## Scoped credential
+
+A cloud credential that is valid for exactly one environment, one purpose and one
+entity. Its root `.env` key is `<KEY>_<ENV>_<PURPOSE>_<NAME>`, uppercased with `-`
+turned into `_`:
+
+```
+CLOUDFLARE_API_TOKEN_PROD_BUCKETS_UPLOADS
+CLOUDFLARE_ACCOUNT_ID_PROD_BUCKETS_UPLOADS
+VERCEL_TOKEN_DEV_APPS_WEB
+VERCEL_TEAM_ID_DEV_APPS_WEB
+```
+
+framer reads only the exact key; there is no fallback to a shorter one. In the
+cloud's dashboard the token is named `framer-<project>-<env>-<purpose>-<name>`.
+Defined in ADR 0023.
+
+## Custom envs
+
+Envs an entity needs that framer doesn't generate, e.g. `RESEND_API_KEY`. Only
+entity types that run code have them: apps, jobs and tasks. They are written in
+gitignored files inside the entity folder, one per environment
+(`apps/web/.env.prod`), and pushed to the backend with `framer env <type> <name>`,
+which stores them at `.framer/<project>/<type-dir>/<name>/<env>.env`. When an
+entity is provisioned it receives its custom envs, which win over generated envs
+with the same name. Defined in ADR 0025.
 
 ## Cloud / cloud adapter
 
 A cloud is where an entity is deployed (AWS, GCP, Fly, k8s, …). A cloud adapter is
 the part of framer that turns entity config into real infrastructure on one
-cloud. framer aims to support any cloud, with adapters added over time. The first
-adapter is **Cloudflare** (buckets become R2 buckets). The entity config names the
-cloud: `{ "cloud": "cloudflare" }`.
+cloud. framer aims to support any cloud, with adapters added over time. Today:
+**Cloudflare** (buckets become R2 buckets) and **Vercel** (apps become one Vercel
+project per environment). The entity config names the cloud:
+`{ "cloud": "cloudflare" }`.
+
+In code, a cloud adapter is a **cloud** (API client plus how to get its
+credentials) and one **provisioner** per entity type it supports.
+
+## Provisioner
+
+The part of a cloud adapter that provisions one entity type on one cloud, e.g.
+"bucket on Cloudflare", "app on Vercel". It declares the names of the envs it
+generates and creates the infrastructure for one environment at a time.
 
 ## Add flow
 
-The sequence every `framer add` follows: **name** → **credentials** (open the
-cloud provider's page, pre-filled when possible, save to the root `.env`) →
-**provision** in every environment → **summary** of the generated envs. Defined in
-ADR 0017.
+The sequence every `framer add` follows: **name** → **code** (apps only: run the
+create command) → **cloud** → **credentials**, per environment (scoped
+credentials; open the cloud provider's page, pre-filled when possible, save to
+the root `.env`) → **provision** in every environment → **summary** of the
+generated envs. Defined in ADR 0024.
+
+## Create command
+
+The command that creates an app's code, e.g. `bunx create-next-app@latest .`.
+`framer add app` asks for it and runs it inside the empty `apps/<name>`, so it
+must target the current folder.
 
 ## Purpose
 
-The entity-type folder a cloud credential is for, used in its name:
-`framer-<purpose>` (e.g. `framer-buckets`), and `framer-<purpose>-<resource>` for
-credentials framer creates for a single resource.
+The entity-type folder a cloud credential is for (e.g. `buckets`). It is part of a
+scoped credential's key (`CLOUDFLARE_API_TOKEN_PROD_BUCKETS_UPLOADS`) and token
+name (`framer-acme-prod-buckets-uploads`), and of the name of credentials framer
+creates for a single resource (`framer-buckets-acme-uploads-prod`).
 
 ## Provision
 

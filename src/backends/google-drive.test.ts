@@ -73,3 +73,21 @@ test("writes, reads and overwrites env files", async () => {
   expect(drive.files.filter((f) => !f.folder).map((f) => f.name)).toEqual(["dev.env"]);
   expect(drive.refreshes()).toBe(1);
 });
+
+test("keeps an entity's custom envs in its own folder", async () => {
+  const drive = fakeDrive();
+  const backend = googleDrive(GOOGLE_AUTH, drive.fetcher);
+
+  await backend.writeEnv("acme", "prod", { RESEND_API_KEY: "re_1" }, "apps/web");
+  await backend.writeEnv("acme", "prod", { BUCKET_UPLOADS_NAME: "acme-uploads-prod" });
+  expect(await backend.readEnv("acme", "prod", "apps/web")).toEqual({ RESEND_API_KEY: "re_1" });
+  expect(await backend.readEnv("acme", "prod")).toEqual({ BUCKET_UPLOADS_NAME: "acme-uploads-prod" });
+
+  const byId = new Map(drive.files.map((file) => [file.id, file]));
+  const path = (file: (typeof drive.files)[number]): string =>
+    file.parent === "root" ? file.name : `${path(byId.get(file.parent)!)}/${file.name}`;
+  expect(drive.files.filter((f) => !f.folder).map(path).sort()).toEqual([
+    ".framer/acme/apps/web/prod.env",
+    ".framer/acme/prod.env",
+  ]);
+});

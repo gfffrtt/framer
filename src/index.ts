@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { parseArgs, styleText } from "node:util";
-import { relative } from "node:path";
+import { exists } from "node:fs/promises";
+import { join, relative } from "node:path";
 import * as p from "@clack/prompts";
 import {
   planInit,
@@ -10,19 +11,25 @@ import {
   type InitOptions,
   type InitStep,
 } from "./commands/init.ts";
-import { planAdd, isSupportedType, SUPPORTED, type AddCloud } from "./commands/add.ts";
+import { entityPath, isEmptyDir, planAdd, runCreateCommand } from "./commands/add.ts";
+import { ENV_FILES_IGNORE, ignoreCustomEnvFiles, planEnv } from "./commands/env.ts";
 import { BACKENDS, loadBackend } from "./backends/index.ts";
 import { googleDrive, login } from "./backends/google-drive.ts";
 import {
-  cloudflare,
-  listCloudflareAccounts,
-  CLOUDFLARE_TOKEN_PERMISSIONS,
-  cloudflareTokenUrl,
-} from "./clouds/cloudflare.ts";
+  CLOUDS,
+  credentialKey,
+  credentialName,
+  type ClientOf,
+  type Cloud,
+  type CloudCredentials,
+  type CloudName,
+  type CredentialTarget,
+} from "./clouds/index.ts";
 import { openBrowser } from "./browser.ts";
 import { findProjectRoot, readProjectConfig, type BackendType } from "./config.ts";
 import { readRootEnv, updateRootEnv } from "./dotenv.ts";
-import { ENTITY_TYPES, validateName } from "./entities.ts";
+import { ENTITY_TYPES, validateName, type EntityType } from "./entities.ts";
+import { PROVISIONERS } from "./provisioners/index.ts";
 import { monochrome } from "./ui.ts";
 
 monochrome();
@@ -31,7 +38,9 @@ const HELP = `framer — Turborepo for infrastructure
 
 Usage:
   framer init [name] [--environment prod] [--backend google-drive] [--skip-install] [--skip-git]
+  framer add app [name] [--create "<command>"] [--cloud vercel]
   framer add bucket [name] [--cloud cloudflare]
+  framer env <type> <name>     Push <type-dir>/<name>/.env.<env> files to the backend
 
 Options:
   -h, --help    Show this help
@@ -181,124 +190,175 @@ async function initCommand(
   p.outro(`Next: ${next.join(" && ")}`);
 }
 
-/** Reads Cloudflare credentials from the root `.env` / process env, guiding the user to create them if missing. */
-async function cloudflareCredentials(
-  root: string,
-  purpose: string,
-): Promise<{ accountId: string; apiToken: string }> {
-  const tokenUrl = cloudflareTokenUrl(purpose);
+/**
+ * Reads a cloud's credentials for one entity in one environment from the root `.env`
+ * (or the process env), guiding the user to create them if missing. Only the exact
+ * keys are read, e.g. `CLOUDFLARE_API_TOKEN_PROD_BUCKETS_UPLOADS` (ADR 0023).
+ */
+async function cloudCredentials(root: string, cloudName: CloudName, target: CredentialTarget): Promise<CloudCredentials> {
+  const cloud: Cloud<{ verify(): Promise<void> }> = CLOUDS[cloudName];
+  const tokenKey = credentialKey(cloud.tokenKey, target);
+  const scopeKey = credentialKey(cloud.scopeKey, target);
+  const tokenName = credentialName(target);
+  const tokenUrl = cloud.tokenUrl(tokenName);
   const env = { ...process.env, ...(await readRootEnv(root)) };
-  let apiToken = env.CLOUDFLARE_API_TOKEN;
-  let accountId = env.CLOUDFLARE_ACCOUNT_ID;
-  if (apiToken && accountId) return { accountId, apiToken };
+  let token = env[tokenKey];
+  let scope = env[scopeKey];
+  if (token && scope) {
+    p.log.step(`${cloud.label} credentials for ${target.env}\n${styleText("dim", `${tokenKey}, ${scopeKey}`)}`);
+    return { token, scope };
+  }
   if (!interactive) {
-    throw new Error(
-      `CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are required in the root .env.\nCreate a token (${CLOUDFLARE_TOKEN_PERMISSIONS}) at:\n${tokenUrl}`,
-    );
+    throw new Error(`${tokenKey} and ${scopeKey} are required in the root .env.\nCreate a token named ${tokenName} at:\n${tokenUrl}`);
   }
 
   const saved: Record<string, string> = {};
 
-  if (!apiToken) {
+  if (!token) {
     p.note(
       [
-        "framer needs a Cloudflare API token to create R2 buckets.",
+        `framer needs a ${cloud.label} token for ${target.purpose}/${target.name} in ${target.env}.`,
         "",
-        `1. A browser tab is opening (link below if it doesn't). The permissions`,
-        `   (${CLOUDFLARE_TOKEN_PERMISSIONS}) are already filled in.`,
-        "   Pick your account if asked.",
-        '2. Click "Continue to summary", then "Create token".',
-        "3. Copy the token and paste it here.",
+        ...cloud.tokenSteps(tokenName),
       ].join("\n"),
-      "Cloudflare API token",
+      `${cloud.label} token for ${target.env}`,
     );
     printUrl(tokenUrl);
     openBrowser(tokenUrl);
-    apiToken = answer(
-      await p.password({ message: "Cloudflare API token", validate: (input) => (input?.trim() ? undefined : "Required.") }),
+    token = answer(
+      await p.password({ message: tokenKey, validate: (input) => (input?.trim() ? undefined : "Required.") }),
     ).trim();
-    saved.CLOUDFLARE_API_TOKEN = apiToken;
+    saved[tokenKey] = token;
   }
 
-  if (!accountId) {
-    const accounts = await listCloudflareAccounts(apiToken);
-    if (accounts.length === 1) {
-      accountId = accounts[0]!.id;
-      p.log.step(`Cloudflare account\n${styleText("dim", `${accounts[0]!.name} (${accountId})`)}`);
-    } else if (accounts.length > 1) {
-      accountId = answer(
+  if (!scope) {
+    const label = `${cloud.label} ${cloud.scopeLabel} for ${target.env}`;
+    const scopes = await cloud.listScopes(token);
+    if (scopes.length === 1) {
+      scope = scopes[0]!.id;
+      p.log.step(`${label}\n${styleText("dim", `${scopes[0]!.name} (${scope})`)}`);
+    } else if (scopes.length > 1) {
+      scope = answer(
         await p.select({
-          message: "Cloudflare account",
-          options: accounts.map((account) => ({ value: account.id, label: account.name, hint: account.id })),
+          message: label,
+          options: scopes.map((candidate) => ({ value: candidate.id, label: candidate.name, hint: candidate.id })),
         }),
       );
     } else {
-      accountId = answer(
-        await p.text({
-          message: "Cloudflare account ID",
-          placeholder: "shown on dash.cloudflare.com → Account home, or in the dashboard URL",
-          validate: (input) => (input?.trim() ? undefined : "Required."),
-        }),
-      ).trim();
+      scope = answer(await p.text({ message: scopeKey, validate: (input) => (input?.trim() ? undefined : "Required.") })).trim();
     }
-    saved.CLOUDFLARE_ACCOUNT_ID = accountId;
+    saved[scopeKey] = scope;
   }
 
   await updateRootEnv(root, saved);
   p.log.step(`Saved ${Object.keys(saved).join(" and ")} to .env`);
-  return { accountId, apiToken };
+  return { token, scope };
 }
 
-async function addCommand(typeArg: string | undefined, nameArg: string | undefined, cloudArg: string | undefined) {
-  if (!typeArg) throw new Error('Usage: "framer add <type> [name]".');
-  if (!isSupportedType(typeArg)) {
-    const known = ENTITY_TYPES.some((entityType) => entityType.type === typeArg);
-    throw new Error(known ? `"framer add ${typeArg}" is not supported yet.` : `Unknown entity type "${typeArg}".`);
-  }
-  const clouds: readonly string[] = SUPPORTED[typeArg];
-  const cloud = (cloudArg ?? clouds[0]) as AddCloud;
-  if (!clouds.includes(cloud)) {
-    throw new Error(`Cloud "${cloud}" is not supported for ${typeArg}s yet. Available: ${clouds.join(", ")}.`);
+const NAME_PLACEHOLDERS: Partial<Record<EntityType, string>> = { app: "web", bucket: "uploads" };
+
+/** An app's code comes from a create command the user picks, run inside `apps/<name>`. */
+async function scaffoldApp(dir: string, path: string, createArg: string | undefined): Promise<void> {
+  if (!(await isEmptyDir(dir))) {
+    // Left behind by an earlier run whose provisioning failed: reuse it.
+    if (createArg !== undefined) throw new Error(`${path} already has files. Remove it or drop --create.`);
+    const reuse = !interactive || answer(await p.confirm({ message: `${path} already has files. Deploy them as they are?` }));
+    if (!reuse) throw new Error(`Remove ${path} or pick another name.`);
+    p.log.step(`Create command\n${styleText("dim", `skipped, using the files in ${path}`)}`);
+    return;
   }
 
-  p.intro(styleText("inverse", " framer ") + ` add ${typeArg}`);
+  let command = createArg;
+  if (command === undefined) {
+    if (!interactive) throw new Error('A create command is required: --create "bun create vite .".');
+    command = answer(
+      await p.text({
+        message: `Create command ${styleText("dim", `(runs inside ${path}, so target ".")`)}`,
+        placeholder: "bunx create-next-app@latest .",
+        validate: (value) => (value?.trim() ? undefined : "Required."),
+      }),
+    ).trim();
+  } else {
+    p.log.step(`Create command\n${styleText("dim", command)}`);
+  }
+
+  p.log.info(`Running ${command} in ${path}`);
+  await runCreateCommand(dir, command);
+  p.log.step(`Created ${path}`);
+}
+
+async function addCommand(
+  typeArg: string | undefined,
+  nameArg: string | undefined,
+  flags: { cloud?: string; create?: string },
+) {
+  if (!typeArg) throw new Error('Usage: "framer add <type> [name]".');
+  const entityType = ENTITY_TYPES.find((candidate) => candidate.type === typeArg);
+  if (!entityType) throw new Error(`Unknown entity type "${typeArg}".`);
+  const type = entityType.type;
+  const clouds: CloudName[] = (PROVISIONERS[type] ?? []).map((provisioner) => provisioner.cloud);
+  if (clouds.length === 0) throw new Error(`"framer add ${type}" is not supported yet.`);
+  if (flags.cloud !== undefined && !clouds.includes(flags.cloud as CloudName)) {
+    throw new Error(`Cloud "${flags.cloud}" is not supported for ${type}s yet. Available: ${clouds.join(", ")}.`);
+  }
+  if (flags.create !== undefined && type !== "app") throw new Error("--create only applies to apps.");
+
+  p.intro(styleText("inverse", " framer ") + ` add ${type}`);
 
   const root = await findProjectRoot();
   const config = await readProjectConfig(root);
   const backend = await loadBackend(root, config);
-  const typeDir = ENTITY_TYPES.find((entityType) => entityType.type === typeArg)!.dir;
+  const title = `${type[0]!.toUpperCase()}${type.slice(1)}`;
 
   // 1. Name.
   let name = nameArg;
   if (name === undefined) {
-    if (!interactive) throw new Error(`Entity name is required: "framer add ${typeArg} <name>".`);
+    if (!interactive) throw new Error(`Entity name is required: "framer add ${type} <name>".`);
     name = answer(
       await p.text({
-        message: `${typeArg[0]!.toUpperCase()}${typeArg.slice(1)} name`,
-        placeholder: typeArg === "bucket" ? "uploads" : "main",
+        message: `${title} name`,
+        placeholder: NAME_PLACEHOLDERS[type] ?? "main",
         validate: (value) => validateName(value?.trim() ?? "", "Entity name") ?? undefined,
       }),
     ).trim();
   } else {
-    p.log.step(`${typeArg[0]!.toUpperCase()}${typeArg.slice(1)} name\n${styleText("dim", name)}`);
+    p.log.step(`${title} name\n${styleText("dim", name)}`);
+  }
+  const error = validateName(name, "Entity name");
+  if (error) throw new Error(error);
+  const path = entityPath(type, name);
+  const dir = join(root, path);
+  if (await exists(join(dir, "framer.json"))) throw new Error(`${path} already exists.`);
+
+  // 2. Code (apps only).
+  if (type === "app") await scaffoldApp(dir, path, flags.create);
+
+  // 3. Cloud.
+  let cloud: CloudName;
+  if (flags.cloud === undefined && interactive) {
+    cloud = answer(
+      await p.select({
+        message: type === "app" ? "Deploy to" : "Cloud",
+        options: clouds.map((value) => ({ value, label: CLOUDS[value].label })),
+      }),
+    );
+  } else {
+    cloud = (flags.cloud as CloudName | undefined) ?? clouds[0]!;
+    p.log.step(`Cloud\n${styleText("dim", CLOUDS[cloud].label)}`);
   }
 
-  // 2. Cloud credentials (opens the provider's page when they are missing).
-  const { accountId, apiToken } = await cloudflareCredentials(root, typeDir);
+  // 4. Cloud credentials, one set per environment (opens the provider's page when they are missing).
+  const clients: Record<string, ClientOf<CloudName>> = {};
+  for (const env of config.environments) {
+    const target = { project: config.name, env, purpose: entityType.dir, name };
+    clients[env] = CLOUDS[cloud].connect(await cloudCredentials(root, cloud, target));
+  }
 
-  const { steps, keys } = await planAdd({
-    root,
-    config,
-    type: typeArg,
-    name,
-    cloud,
-    backend,
-    cloudflare: cloudflare({ accountId, apiToken }),
-  });
-  // 3. Provision in every environment.
+  // 5. Provision in every environment.
+  const { steps, keys } = await planAdd({ root, config, type, name, cloud, clients, backend });
   await runSteps(steps);
 
-  // 4. Summary of the generated envs, so the user knows their names.
+  // 6. Summary of the generated envs, so the user knows their names.
   p.note(
     [
       ...keys,
@@ -308,7 +368,34 @@ async function addCommand(typeArg: string | undefined, nameArg: string | undefin
     ].join("\n"),
     "Generated envs",
   );
-  p.outro(`Added ${typeArg} ${name}`);
+  p.outro(`Added ${type} ${name}`);
+}
+
+async function envCommand(typeArg: string | undefined, nameArg: string | undefined) {
+  if (!typeArg || !nameArg) throw new Error('Usage: "framer env <type> <name>", e.g. "framer env app web".');
+  const entityType = ENTITY_TYPES.find((candidate) => candidate.type === typeArg);
+  if (!entityType) throw new Error(`Unknown entity type "${typeArg}".`);
+
+  p.intro(styleText("inverse", " framer ") + ` env ${entityType.type} ${nameArg}`);
+
+  const root = await findProjectRoot();
+  const config = await readProjectConfig(root);
+  const backend = await loadBackend(root, config);
+  const { path, steps, pushed, skipped } = await planEnv({ root, config, type: entityType.type, name: nameArg, backend });
+
+  if (await ignoreCustomEnvFiles(root, path)) {
+    p.log.warn(`${path}/.env.* files weren't ignored by git. Added ${ENV_FILES_IGNORE.join(", ")} to .gitignore.`);
+  }
+  await runSteps(steps);
+
+  p.note(
+    [
+      ...pushed.flatMap(({ env, keys }) => [`${env}:`, ...(keys.length ? keys.map((key) => `  ${key}`) : ["  (empty)"])]),
+      ...(skipped.length ? ["", styleText("dim", `no file, left as is: ${skipped.join(", ")}`)] : []),
+    ].join("\n"),
+    "Custom envs",
+  );
+  p.outro(`Pushed custom envs of ${path}`);
 }
 
 async function main(argv: string[]) {
@@ -322,6 +409,7 @@ async function main(argv: string[]) {
       backend: { type: "string" },
       environment: { type: "string" },
       cloud: { type: "string" },
+      create: { type: "string" },
     },
   });
 
@@ -349,7 +437,16 @@ async function main(argv: string[]) {
     }
     case "add": {
       try {
-        await addCommand(rest[0], rest[1], values.cloud);
+        await addCommand(rest[0], rest[1], { cloud: values.cloud, create: values.create });
+      } catch (error) {
+        p.cancel(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      }
+      return;
+    }
+    case "env": {
+      try {
+        await envCommand(rest[0], rest[1]);
       } catch (error) {
         p.cancel(error instanceof Error ? error.message : String(error));
         process.exit(1);

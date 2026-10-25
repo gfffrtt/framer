@@ -3,14 +3,18 @@ import type { EnvVars } from "../dotenv.ts";
 import { readRootEnv } from "../dotenv.ts";
 import { googleDrive } from "./google-drive.ts";
 
-/** Where framer stores the envs it generates: one env file per project and environment. */
+/**
+ * Where framer stores envs: one env file per environment for the project's generated
+ * envs (`<env>.env`), and one per environment for each entity's custom envs
+ * (`<entity>/<env>.env`, e.g. `apps/web/prod.env`).
+ */
 export type Backend = {
   /** Creates the project's storage (e.g. `.framer/<project>/`) if it does not exist yet. */
   ensureProject(project: string): Promise<void>;
-  /** Reads `<env>.env` of a project. Missing file = no vars. */
-  readEnv(project: string, env: string): Promise<EnvVars>;
-  /** Replaces `<env>.env` of a project. */
-  writeEnv(project: string, env: string, vars: EnvVars): Promise<void>;
+  /** Reads `<env>.env` of a project, or of one of its entities (`apps/web`). Missing file = no vars. */
+  readEnv(project: string, env: string, entity?: string): Promise<EnvVars>;
+  /** Replaces `<env>.env` of a project, or of one of its entities (`apps/web`). */
+  writeEnv(project: string, env: string, vars: EnvVars, entity?: string): Promise<void>;
 };
 
 export const BACKENDS: { type: BackendType; label: string }[] = [{ type: "google-drive", label: "Google Drive" }];

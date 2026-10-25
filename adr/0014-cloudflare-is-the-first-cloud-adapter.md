@@ -1,7 +1,7 @@
 # 0014. Cloudflare is the first cloud adapter, starting with R2 buckets
 
 - **Date:** 2026-10-24
-- **Status:** Accepted
+- **Status:** Accepted (credentials superseded by 0023)
 
 ## Context
 

@@ -83,7 +83,9 @@ function projectFiles(name: string, environment: string, backend: BackendType): 
       "dist",
       "coverage",
       ".env",
-      ".env.*.local",
+      // Custom envs (`.env.<env>`) are secrets; framer syncs them to the backend.
+      ".env.*",
+      "!.env.example",
       ".DS_Store",
       "",
     ].join("\n"),

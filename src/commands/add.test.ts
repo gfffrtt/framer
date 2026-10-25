@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { add, envPrefix } from "./add.ts";
 import { cloudflare, listCloudflareAccounts } from "../clouds/cloudflare.ts";
+import { credentialKey, credentialName } from "../clouds/index.ts";
 import type { ProjectConfig } from "../config.ts";
 import { memoryBackend } from "../testing/memory-backend.ts";
 
@@ -61,7 +62,7 @@ test("provisions a bucket per environment and stores its envs in the backend", a
   const cf = fakeCloudflare();
   memory.files["acme/dev.env"] = { EXISTING: "kept" };
 
-  const dir = await add({ root, config, type: "bucket", name: "uploads", cloud: "cloudflare", backend: memory.backend, cloudflare: cf.client });
+  const dir = await add({ root, config, type: "bucket", name: "uploads", cloud: "cloudflare", backend: memory.backend, clients: { dev: cf.client, prod: cf.client } });
 
   expect(cf.buckets).toEqual(["acme-uploads-dev", "acme-uploads-prod"]);
   expect(cf.tokens.map((token) => token.name)).toEqual([
@@ -98,19 +99,37 @@ test("provisions a bucket per environment and stores its envs in the backend", a
 test("leaves no entity behind when provisioning fails", async () => {
   const cf = fakeCloudflare({ fail: true });
   await expect(
-    add({ root, config, type: "bucket", name: "uploads", cloud: "cloudflare", backend: memory.backend, cloudflare: cf.client }),
+    add({ root, config, type: "bucket", name: "uploads", cloud: "cloudflare", backend: memory.backend, clients: { dev: cf.client, prod: cf.client } }),
   ).rejects.toThrow("nope");
   expect(await exists(join(root, "buckets", "uploads"))).toBe(false);
 });
 
 test("refuses an existing entity, bad names and too-long bucket names", async () => {
   const cf = fakeCloudflare();
-  const options = { root, config, type: "bucket", cloud: "cloudflare", backend: memory.backend, cloudflare: cf.client } as const;
+  const options = { root, config, type: "bucket", cloud: "cloudflare", backend: memory.backend, clients: { dev: cf.client, prod: cf.client } } as const;
 
   await add({ ...options, name: "uploads" });
   await expect(add({ ...options, name: "uploads" })).rejects.toThrow("already exists");
   await expect(add({ ...options, name: "Uploads" })).rejects.toThrow("lowercase");
   await expect(add({ ...options, name: "x".repeat(60) })).rejects.toThrow("longer than 63");
+});
+
+test("uses each environment's own credentials", async () => {
+  const dev = fakeCloudflare();
+  const prod = fakeCloudflare();
+  await add({ root, config, type: "bucket", name: "uploads", cloud: "cloudflare", clients: { dev: dev.client, prod: prod.client }, backend: memory.backend });
+  expect(dev.buckets).toEqual(["acme-uploads-dev"]);
+  expect(prod.buckets).toEqual(["acme-uploads-prod"]);
+
+  await expect(
+    add({ root, config, type: "bucket", name: "files", cloud: "cloudflare", clients: { dev: dev.client }, backend: memory.backend }),
+  ).rejects.toThrow('No cloudflare credentials for environment "prod"');
+});
+
+test("credential keys are exact per environment, purpose and entity", () => {
+  const target = { project: "acme", env: "prod-eu", purpose: "buckets", name: "user-files" };
+  expect(credentialKey("CLOUDFLARE_API_TOKEN", target)).toBe("CLOUDFLARE_API_TOKEN_PROD_EU_BUCKETS_USER_FILES");
+  expect(credentialName(target)).toBe("framer-acme-prod-eu-buckets-user-files");
 });
 
 test("env prefix", () => {

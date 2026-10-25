@@ -37,19 +37,29 @@ framer applies the same idea to infrastructure.
    image…). The details come later.
 8. **Generated envs live in a backend.** When framer provisions something, the
    values it creates (endpoints, keys…) go to the project's backend (Google Drive
-   first), one env file per environment, not into the repo.
+   first), one env file per environment, not into the repo. Entities that run
+   code (apps, jobs, tasks) also have **custom envs** (`RESEND_API_KEY`…) in
+   gitignored `.env.<env>` files, which `framer env` syncs to the backend.
 9. **A single native binary.** framer is a standalone CLI you call directly, like
    `bun`, built with `bun build --compile`.
+10. **Credentials are scoped, never shared.** Every cloud credential is for exactly
+    one environment and one entity: `CLOUDFLARE_API_TOKEN_PROD_BUCKETS_UPLOADS`.
+    framer reads only that exact key, with no fallback, so a dev token can never
+    touch prod.
 
 ## Project layout
 
 ```
 my-project/
 ├── framer.json             # { name, environments, backend }  (later: order)
-├── .env                    # framer's own credentials (gitignored)
+├── .env                    # framer's own credentials, per env and entity (gitignored)
 ├── package.json            # bun workspaces over every entity folder
 ├── turbo.json
 ├── apps/                   # long-running services
+│   └── web/
+│       ├── framer.json     # { "cloud": "vercel", "envs": ["APP_WEB_URL"] }
+│       ├── .env.dev        # custom envs for dev (gitignored, synced by `framer env`)
+│       └── .env.prod       # custom envs for prod
 ├── dbs/
 │   └── main/               # an entity
 │       ├── framer.json     # base config: cloud, engine, …
@@ -68,9 +78,10 @@ my-project/
 | Command                    | Status  | What it does                                        |
 | -------------------------- | ------- | --------------------------------------------------- |
 | `framer init [name]`       | ✅ v0    | Creates an empty framer project (Turborepo + Bun), picks the backend |
-| `framer add app <name>`    | planned | Scaffolds `apps/<name>` with a `framer.json`        |
+| `framer add app <name>`    | ✅ v0    | Creates the app with a create command, deploys it to Vercel per environment with the project's envs |
 | `framer add db <name>`     | planned | Scaffolds `dbs/<name>` with a `framer.json`         |
 | `framer add bucket <name>` | ✅ v0    | Provisions an R2 bucket per environment (Cloudflare), stores its envs in the backend |
+| `framer env <type> <name>` | ✅ v0    | Pushes an app/job/task's `.env.<env>` files (custom envs) to the backend |
 | `framer add job <name>`    | planned | Scaffolds `jobs/<name>`                             |
 | `framer add task <name>`   | planned | Scaffolds `tasks/<name>`                            |
 | `framer dev`               | idea    | Runs everything locally                             |
@@ -83,19 +94,33 @@ my-project/
 Every `framer add <type> [name]` feels the same, whatever the type or cloud:
 
 1. **Name**: from the argument, or framer asks.
-2. **Credentials**: if the cloud's credentials are missing, framer opens the
-   provider's page in the browser, pre-filled when possible, asks only for what it
-   can't look up itself, and saves it to the root `.env`.
-3. **Provision**: in every environment; generated envs go to the backend.
-4. **Summary**: the names of the generated envs and where they are stored.
+2. **Code** (apps only): framer asks for a create command (`bunx create-next-app .`,
+   `bun create vite .`, …) and runs it inside `apps/<name>`.
+3. **Cloud**: where the entity goes, among the clouds that support its type.
+4. **Credentials, per environment**: framer reads the exact scoped keys (see
+   below). For each one missing, it opens the provider's page in the browser,
+   pre-filled when possible, asks only for what it can't look up itself, and
+   saves it to the root `.env`.
+5. **Provision**: in every environment, with that environment's credentials;
+   generated envs go to the backend. The entity also receives the other entities'
+   generated envs and its own custom envs.
+6. **Summary**: the names of the generated envs and where they are stored.
 
-Things framer creates are named predictably: `framer-<purpose>` for credentials
-(e.g. `framer-buckets`), `<project>-<name>-<env>` for resources.
+Things framer creates are named predictably:
+
+| What                                  | Name                                       | Example                                      |
+| ------------------------------------- | ------------------------------------------ | -------------------------------------------- |
+| Credential key in the root `.env`     | `<KEY>_<ENV>_<PURPOSE>_<NAME>`             | `CLOUDFLARE_API_TOKEN_PROD_BUCKETS_UPLOADS`  |
+| Token the user creates for framer     | `framer-<project>-<env>-<purpose>-<name>`  | `framer-acme-prod-buckets-uploads`           |
+| Credential framer creates for a resource | `framer-<purpose>-<resource>`           | `framer-buckets-acme-uploads-prod`           |
+| Resource                              | `<project>-<name>-<env>`                   | `acme-uploads-prod`                          |
+| Generated env                         | `<TYPE>_<NAME>_<KEY>`                      | `BUCKET_UPLOADS_ENDPOINT`                    |
 
 ## Roadmap (rough)
 
 1. **Scaffolding + provisioning**: `init` (with a backend), then `add <type>`,
-   which provisions the entity in every environment. Buckets on Cloudflare first.
+   which provisions the entity in every environment. Buckets on Cloudflare and
+   apps on Vercel first.
    *(we are here)*
 2. **Config model**: the `framer.json` schema per entity type, plus how
    per-environment files merge into it.

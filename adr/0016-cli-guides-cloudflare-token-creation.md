@@ -1,7 +1,7 @@
 # 0016. The CLI guides the user to create Cloudflare credentials
 
 - **Date:** 2026-10-24
-- **Status:** Accepted
+- **Status:** Superseded by 0023
 
 ## Context
 
