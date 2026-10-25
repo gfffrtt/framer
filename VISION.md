@@ -25,7 +25,7 @@ framer applies the same idea to infrastructure.
 2. **A framer project is a real Turborepo.** Bun workspaces + `turbo.json`. framer
    adds infra semantics on top; it doesn't replace Turborepo.
 3. **`framer.json` everywhere.** The root `framer.json` is the source of truth for
-   the project (its `name`, later its `environments` and `order`). Every entity has
+   the project (its `name`, `environments`, `backend`, later its `order`). Every entity has
    its own `framer.json` with its base config (which cloud, which engine…).
 4. **Per-environment overrides.** An entity can have one optional `<env>.json` per
    environment (`dev.json`, `prod.json`, …) that overrides its `framer.json`.
@@ -35,14 +35,18 @@ framer applies the same idea to infrastructure.
    are added one at a time, not all at once.
 7. **Language-agnostic entities.** An app can be anything (Bun, Go, Python, a Docker
    image…). The details come later.
-8. **A single native binary.** framer is a standalone CLI you call directly, like
+8. **Generated envs live in a backend.** When framer provisions something, the
+   values it creates (endpoints, keys…) go to the project's backend (Google Drive
+   first), one env file per environment, not into the repo.
+9. **A single native binary.** framer is a standalone CLI you call directly, like
    `bun`, built with `bun build --compile`.
 
 ## Project layout
 
 ```
 my-project/
-├── framer.json             # { "name": "my-project" }  (later: environments, order)
+├── framer.json             # { name, environments, backend }  (later: order)
+├── .env                    # framer's own credentials (gitignored)
 ├── package.json            # bun workspaces over every entity folder
 ├── turbo.json
 ├── apps/                   # long-running services
@@ -53,6 +57,8 @@ my-project/
 │       ├── staging.json    # optional staging overrides
 │       └── prod.json       # optional prod overrides
 ├── buckets/                # object storage
+│   └── uploads/
+│       └── framer.json     # { "cloud": "cloudflare" }
 ├── jobs/                   # scheduled (cron) work
 └── tasks/                  # one-off / triggered work
 ```
@@ -61,18 +67,22 @@ my-project/
 
 | Command                    | Status  | What it does                                        |
 | -------------------------- | ------- | --------------------------------------------------- |
-| `framer init [name]`       | ✅ v0    | Creates an empty framer project (Turborepo + Bun)   |
+| `framer init [name]`       | ✅ v0    | Creates an empty framer project (Turborepo + Bun), picks the backend |
 | `framer add app <name>`    | planned | Scaffolds `apps/<name>` with a `framer.json`        |
 | `framer add db <name>`     | planned | Scaffolds `dbs/<name>` with a `framer.json`         |
-| `framer add bucket <name>` | planned | Scaffolds `buckets/<name>`                          |
+| `framer add bucket <name>` | ✅ v0    | Provisions an R2 bucket per environment (Cloudflare), stores its envs in the backend |
 | `framer add job <name>`    | planned | Scaffolds `jobs/<name>`                             |
 | `framer add task <name>`   | planned | Scaffolds `tasks/<name>`                            |
 | `framer dev`               | idea    | Runs everything locally                             |
 | `framer plan` / `deploy`   | idea    | Diff desired vs. real infra per environment, apply  |
 
+`framer add` provisions right away, in every environment.
+
 ## Roadmap (rough)
 
-1. **Scaffolding**: `init`, then `add <type>`. Pure file generation. *(we are here)*
+1. **Scaffolding + provisioning**: `init` (with a backend), then `add <type>`,
+   which provisions the entity in every environment. Buckets on Cloudflare first.
+   *(we are here)*
 2. **Config model**: the `framer.json` schema per entity type, plus how
    per-environment files merge into it.
 3. **Ordering**: `order` in the root `framer.json` lists stages of entities.

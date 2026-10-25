@@ -12,8 +12,12 @@ It is identified by the `name` in its root `framer.json`.
 ## Project config (root `framer.json`)
 
 The `framer.json` at the root of a project. It is the source of truth for the
-project as a whole. Today it contains only `name`. Later it will contain
-`environments` and `order`.
+project as a whole. It contains `name`, `environments` and `backend`. Later it
+will contain `order`.
+
+```json
+{ "name": "acme", "environments": ["dev", "prod"], "backend": { "type": "google-drive" } }
+```
 
 > There are two kinds of `framer.json`: the **project config** at the root and the
 > **entity config** inside each entity folder. Say which one you mean.
@@ -50,13 +54,15 @@ type. An entity is referred to as `<type-folder>/<name>`, e.g. `dbs/main`.
 
 The base config of an entity. It applies to every environment, and holds things
 like which cloud the entity runs on and what it is (e.g. which db engine). The
-schema depends on the entity type. *(Not defined yet.)*
+schema depends on the entity type. For a bucket it is `{ "cloud": "cloudflare" }`;
+other types are not defined yet.
 
 ## Environment
 
 A named deployment target of the whole project, e.g. `dev`, `staging`, `prod`.
 One project describes all of its environments. Environment names are defined by
-the user in the `environments` array of the project config. *(Not implemented yet.)*
+the user in the `environments` array of the project config. `framer init` starts
+with `["dev", "prod"]`. `framer add` provisions an entity in every environment.
 
 ## Environment config
 
@@ -76,8 +82,39 @@ provisioned. It is a list of **stages**; each stage is a list of entities:
 Stages run one after another. Entities inside the same stage are provisioned in
 parallel. *(Not implemented yet.)*
 
+## Backend
+
+Where framer stores the envs it generates (bucket names, endpoints, access keys…).
+Chosen during `framer init` and recorded as `backend` in the project config. The
+only backend today is **Google Drive**, which keeps them in
+`.framer/<project>/<env>.env` in the user's Drive.
+
+> Say "backend" or "framer backend". Not to be confused with an app that is a
+> backend service.
+
+## Generated envs / env file
+
+The environment variables framer creates when it provisions an entity, e.g.
+`BUCKET_UPLOADS_ENDPOINT`. Keys are prefixed with the entity type and entity name.
+They are stored in the backend, in one **env file** per environment
+(`<env>.env`), shared by all entities of the project.
+
+## Root `.env`
+
+The gitignored `.env` at the root of a project. It holds the credentials framer
+itself needs: `GOOGLE_AUTH` (base64 Google credentials for the backend),
+`CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`. It is not where generated envs
+go; those live in the backend.
+
 ## Cloud / cloud adapter
 
 A cloud is where an entity is deployed (AWS, GCP, Fly, k8s, …). A cloud adapter is
 the part of framer that turns entity config into real infrastructure on one
-cloud. framer aims to support any cloud, with adapters added over time.
+cloud. framer aims to support any cloud, with adapters added over time. The first
+adapter is **Cloudflare** (buckets become R2 buckets). The entity config names the
+cloud: `{ "cloud": "cloudflare" }`.
+
+## Provision
+
+To create the real infrastructure behind an entity, in every environment, and
+store its generated envs in the backend. `framer add` provisions immediately.

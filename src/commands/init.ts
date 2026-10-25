@@ -1,18 +1,12 @@
 import { mkdir, readdir } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
-
-export const ENTITY_TYPES = [
-  { type: "app", dir: "apps", description: "long-running services" },
-  { type: "db", dir: "dbs", description: "databases" },
-  { type: "bucket", dir: "buckets", description: "object storage" },
-  { type: "job", dir: "jobs", description: "scheduled (cron) work" },
-  { type: "task", dir: "tasks", description: "one-off or triggered work" },
-] as const;
-
-export const ENTITY_DIRS = ENTITY_TYPES.map((entityType) => entityType.dir);
+import type { Backend } from "../backends/index.ts";
+import type { BackendType, ProjectConfig } from "../config.ts";
+import { updateRootEnv } from "../dotenv.ts";
+import { ENTITY_DIRS, validateName } from "../entities.ts";
 
 const TURBO_VERSION = "^2.11.10";
-const NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+export const DEFAULT_ENVIRONMENTS = ["dev", "prod"];
 
 export type InitOptions = {
   name: string;
@@ -20,15 +14,16 @@ export type InitOptions = {
   cwd?: string;
   install?: boolean;
   git?: boolean;
+  backend: {
+    type: BackendType;
+    /** Credentials saved to the root `.env`, e.g. `{ GOOGLE_AUTH: "…" }`. */
+    credentials: Record<string, string>;
+    client: Backend;
+  };
 };
 
 export function validateProjectName(name: string): string | null {
-  if (!name) return "Project name is required.";
-  if (name.length > 214) return "Project name must be at most 214 characters.";
-  if (!NAME_PATTERN.test(name)) {
-    return "Project name must be lowercase and contain only letters, numbers and dashes.";
-  }
-  return null;
+  return validateName(name, "Project name");
 }
 
 async function isEmptyOrMissing(dir: string): Promise<boolean> {
@@ -43,9 +38,10 @@ function json(value: unknown): string {
   return JSON.stringify(value, null, 2) + "\n";
 }
 
-function projectFiles(name: string): Record<string, string> {
+function projectFiles(name: string, backend: BackendType): Record<string, string> {
+  const config: ProjectConfig = { name, environments: DEFAULT_ENVIRONMENTS, backend: { type: backend } };
   return {
-    "framer.json": json({ name }),
+    "framer.json": json(config),
     "package.json": json({
       name,
       private: true,
@@ -100,7 +96,7 @@ export type InitStep = {
 
 /** Validates the options and returns the steps that create the project, without running them. */
 export async function planInit(options: InitOptions): Promise<{ root: string; steps: InitStep[] }> {
-  const { name, cwd = process.cwd(), install = true, git = true } = options;
+  const { name, cwd = process.cwd(), install = true, git = true, backend } = options;
 
   const error = validateProjectName(name);
   if (error) throw new Error(error);
@@ -116,10 +112,20 @@ export async function planInit(options: InitOptions): Promise<{ root: string; st
       done: "Wrote project files",
       run: async () => {
         await mkdir(root, { recursive: true });
-        for (const [path, content] of Object.entries(projectFiles(name))) {
+        for (const [path, content] of Object.entries(projectFiles(name, backend.type))) {
           await Bun.write(join(root, path), content);
         }
       },
+    },
+    {
+      title: "Saving backend credentials to .env",
+      done: "Saved backend credentials to .env",
+      run: () => updateRootEnv(root, backend.credentials),
+    },
+    {
+      title: `Creating .framer/${name} in the backend`,
+      done: `Created .framer/${name} in the backend`,
+      run: () => backend.client.ensureProject(name),
     },
   ];
 
